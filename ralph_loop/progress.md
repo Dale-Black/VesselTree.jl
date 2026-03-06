@@ -522,3 +522,22 @@
   - update_radii! O(n) BFS is correct and faster, but the generation-sweep was already O(n) in practice (each segment visited once per generation, max_gen << n)
   - Peak memory well under 8GB — SoA Float64 arrays for 4M segments ≈ 30 arrays × 4M × 8B = 960MB
 - Next: P9 complete. Remaining: P8 (VESSEL-1024 JLD2/VTP, VESSEL-1025 Makie, VESSEL-1026 STL, VESSEL-1027 Demo)
+
+### 2026-03-06: VESSEL-1024 [PASS]
+- Attempted: Implement JLD2 save/load and VTP centerline export
+- Result: 21 new tests pass (21176 total), all acceptance criteria met
+- Regression gate: 21176 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/export.jl — save_tree (JLD2), load_tree (JLD2), export_centerlines_vtp (WriteVTK), export_forest_vtp
+  - src/VesselTree.jl — include + exports
+  - test/runtests.jl — include test_export.jl
+- Features:
+  - save_tree: stores only active segments (1:n) via JLD2.jldsave; all geometry, topology, hemodynamics preserved
+  - load_tree: reconstructs VascularTree with exact-fit capacity; Symbol junction_type serialized as String
+  - export_centerlines_vtp: each segment → 2-point line cell; radius, strahler_order, flow, is_terminal as cell data
+  - export_forest_vtp: exports each tree to separate .vtp in given directory
+- Learning:
+  - JLD2.jldsave with keyword args is clean for flat serialization; Symbol arrays need String conversion for JLD2 compat
+  - WriteVTK MeshCell(PolyData.Lines(), [i1, i2]) creates line cells for centerlines
+  - vtk_grid do-block syntax handles file writing and returns output paths
+- Next: VESSEL-1025 (Makie visualization) or VESSEL-1026 (STL mesh + graph export)

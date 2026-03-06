@@ -34,6 +34,7 @@ include("barabasi.jl")
 include("validation.jl")
 include("subdivision.jl")
 include("forest.jl")
+include("export.jl")
 
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
@@ -63,5 +64,6 @@ export TreeConfig, TerritoryMap, initialize_territories, query_territory
 export sample_in_territory, check_inter_tree_collision, coronary_tree_configs
 export estimate_total_segments, estimate_subdivision_capacity, subdivide_terminals!
 export CoronaryForest, generate_coronary_forest, generate_kassab_coronary, validate_forest
+export save_tree, load_tree, export_centerlines_vtp, export_forest_vtp
 
 end # module VesselTree
