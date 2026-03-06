@@ -179,6 +179,27 @@ function _sample_segment_length(order::Int, params::MorphometricParams, rng::Abs
 end
 
 """
+    _sample_element_diameter(order, params, rng) -> Float64
+
+Sample element diameter (um) from Kassab element-level distribution.
+Returns a positive diameter, truncated to avoid unreasonably small values.
+"""
+function _sample_element_diameter(order::Int, params::MorphometricParams, rng::AbstractRNG)
+    idx = order + 1
+    if idx < 1 || idx > length(params.diameter_mean_elem)
+        return params.vessel_cutoff_um
+    end
+    mean_um = params.diameter_mean_elem[idx]
+    sd_um = params.diameter_sd_elem[idx]
+    min_um = max(params.vessel_cutoff_um * 0.5, mean_um * 0.1)
+    for _ in 1:10
+        d = mean_um + randn(rng) * sd_um
+        d >= min_um && return d
+    end
+    return mean_um
+end
+
+"""
     subdivide_terminals!(tree, params; rng, max_order)
 
 Recursively subdivide each terminal of order > 0 down to order 0 (capillaries)
@@ -300,12 +321,14 @@ function _subdivide_recursive!(
         d_dir = _random_daughter_direction(current_dir, false, d_order, parent_order, rng)
         d_distal = (bp_x + d_dir[1] * d_length, bp_y + d_dir[2] * d_length, bp_z + d_dir[3] * d_length)
         d_id = add_segment!(tree, bp, d_distal, d_radius, Int32(current_parent))
+        tree.topology.strahler_order[d_id] = Int32(d_order)
 
         # Create continuation segment (same order as parent element)
         c_length = _sample_segment_length(parent_order, params, rng)
         c_dir = _random_daughter_direction(current_dir, true, parent_order, parent_order, rng)
         c_distal = (bp_x + c_dir[1] * c_length, bp_y + c_dir[2] * c_length, bp_z + c_dir[3] * c_length)
         c_id = add_segment!(tree, bp, c_distal, c_radius, Int32(current_parent))
+        tree.topology.strahler_order[c_id] = Int32(parent_order)
 
         # Recursively subdivide the daughter
         if d_order > 0

@@ -629,6 +629,25 @@ function generate_kassab_coronary(
         end
     end
 
+    # Fix low-order terminal radii: set order-0 and order-1 terminals to Kassab
+    # diameters, then propagate Murray's law upward. This corrects Murray-chain
+    # attenuation at low orders (which produces ~2.7um instead of 8um) while
+    # keeping Murray's law exact at every junction.
+    for (name, tree) in trees
+        tp = per_artery[name]
+        seg = tree.segments
+        topo = tree.topology
+        for i in 1:seg.n
+            if topo.is_terminal[i]
+                ord = Int(topo.strahler_order[i])
+                if ord <= 1 && ord + 1 <= length(tp.diameter_mean_elem)
+                    seg.radius[i] = tp.diameter_mean_elem[ord + 1] / 2.0 / 1000.0
+                end
+            end
+        end
+        update_radii!(tree, gamma)
+    end
+
     t_phase2_end = time()
     if verbose
         println("  Phase 2 time: $(round(t_phase2_end - t_phase2, digits=1))s")

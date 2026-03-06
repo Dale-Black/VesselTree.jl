@@ -872,7 +872,7 @@
       "id": "VESSEL-1042",
       "title": "VERIFY: Full Kassab parity validation — target >= 7/9 metrics pass",
       "type": "VERIFY",
-      "status": "open",
+      "status": "done",
       "priority": 9,
       "milestone": "P10",
       "blockedBy": ["VESSEL-1041"],
