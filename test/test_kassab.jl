@@ -18,13 +18,14 @@ using Distributions
         add_segment!(tree, (5.0, 0.0, 0.0), (10.0, 3.0, 0.0), 0.5, Int32(1))
         add_segment!(tree, (5.0, 0.0, 0.0), (10.0, -3.0, 0.0), 0.3, Int32(1))
 
-        # Set radii to known Kassab diameters (in mm, params are in um)
-        # Order 5: 184um diameter = 92um radius = 0.092mm
-        tree.segments.radius[1] = 0.092
-        # Order 3: 56um diameter = 28um radius = 0.028mm
-        tree.segments.radius[2] = 0.028
-        # Order 2: 30um diameter = 15um radius = 0.015mm
-        tree.segments.radius[3] = 0.015
+        # Set radii to known RCA diameters (in mm, params are in um)
+        # RCA bounds: [0.0, 8.815, 11.085, 15.6, 24.95, 44.7, 92.5, 194.15, ...]
+        # Order 5: 65um diameter → 0.0325mm radius (within 44.7-92.5)
+        tree.segments.radius[1] = 0.0325
+        # Order 3: 20um diameter → 0.010mm radius (within 15.6-24.95)
+        tree.segments.radius[2] = 0.010
+        # Order 2: 13um diameter → 0.0065mm radius (within 11.085-15.6)
+        tree.segments.radius[3] = 0.0065
 
         assign_strahler_orders!(tree, params)
 
@@ -61,15 +62,14 @@ using Distributions
     @testset "assign_strahler_orders! — boundary diameters" begin
         tree = VascularTree("test", 50)
 
-        # Test at exact boundary thresholds
-        # diameter_bounds = [5, 11, 21, 43, 77, 140, 250, 450, 800, 1400, 2500, 4500, Inf]
-        # Order 0: 5-11um, Order 1: 11-21um, etc.
+        # Test at exact boundary thresholds (RCA bounds from Eq 3A/3B)
+        # diameter_bounds = [0.0, 8.815, 11.085, 15.6, 24.95, 44.7, 92.5, 194.15, ...]
         test_cases = [
-            (5.0, 0),    # lower bound of order 0
-            (11.0, 1),   # lower bound of order 1
-            (21.0, 2),   # lower bound of order 2
-            (140.0, 5),  # lower bound of order 5
-            (4500.0, 11), # lower bound of order 11
+            (5.0, 0),      # within order 0 range (0-8.815)
+            (8.815, 1),    # exact lower bound of order 1
+            (11.085, 2),   # exact lower bound of order 2
+            (44.7, 5),     # exact lower bound of order 5
+            (2319.5, 11),  # exact lower bound of order 11
         ]
 
         for (j, (diam_um, expected_order)) in enumerate(test_cases)
@@ -81,12 +81,12 @@ using Distributions
         end
     end
 
-    @testset "assign_strahler_orders! — below minimum" begin
+    @testset "assign_strahler_orders! — very small diameter" begin
         tree = VascularTree("test", 10)
-        # Diameter = 4um (below minimum 5um boundary)
+        # Diameter = 4um — within order 0 range (bounds start at 0.0)
         add_segment!(tree, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 0.002, Int32(-1))  # 4um diameter
         assign_strahler_orders!(tree, params)
-        @test tree.topology.strahler_order[1] == Int32(-1)
+        @test tree.topology.strahler_order[1] == Int32(0)
     end
 
     # --- Asymmetry sampling ---
@@ -259,10 +259,11 @@ using Distributions
 
     @testset "build_empirical_connectivity — hand-built tree" begin
         tree = VascularTree("test", 50)
-        # Build a simple bifurcation tree with known orders
-        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 0.092, Int32(-1))   # order 5
-        add_segment!(tree, (5.0, 0.0, 0.0), (10.0, 3.0, 0.0), 0.028, Int32(1))    # order 3
-        add_segment!(tree, (5.0, 0.0, 0.0), (10.0, -3.0, 0.0), 0.015, Int32(1))   # order 2
+        # Build a simple bifurcation tree with known orders (using RCA bounds)
+        # Order 5: 65um → radius 0.0325mm; Order 3: 20um → 0.010mm; Order 2: 13um → 0.0065mm
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 0.0325, Int32(-1))   # order 5
+        add_segment!(tree, (5.0, 0.0, 0.0), (10.0, 3.0, 0.0), 0.010, Int32(1))     # order 3
+        add_segment!(tree, (5.0, 0.0, 0.0), (10.0, -3.0, 0.0), 0.0065, Int32(1))   # order 2
 
         assign_strahler_orders!(tree, params)
         CM = build_empirical_connectivity(tree, params)

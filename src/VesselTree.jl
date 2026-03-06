@@ -38,7 +38,7 @@ include("export.jl")
 
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
-export MorphometricParams, kassab_coronary_params, classify_order
+export MorphometricParams, kassab_coronary_params, kassab_rca_params, kassab_lad_params, kassab_lcx_params, classify_order
 export AbstractDomain, SphereDomain, BoxDomain, EllipsoidDomain
 export in_domain, sample_point, signed_distance
 export point_segment_distance, point_segment_distance_sq

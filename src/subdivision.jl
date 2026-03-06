@@ -117,6 +117,7 @@ function subdivide_terminals!(
     tree::VascularTree,
     params::MorphometricParams;
     rng::AbstractRNG=Random.default_rng(),
+    max_order::Int=params.n_orders - 1,
 )
     assign_strahler_orders!(tree, params)
 
@@ -127,7 +128,7 @@ function subdivide_terminals!(
     for i in 1:n  # sequential: collect terminal list
         if tree.topology.is_terminal[i]
             ord = Int(tree.topology.strahler_order[i])
-            if ord > 0
+            if ord > 0 && ord <= max_order
                 push!(term_indices, i)
                 push!(term_orders, ord)
             end

@@ -671,3 +671,28 @@
   - Lengths in Tables 1-3 are in MILLIMETERS, not micrometers
   - Table 9 errors are ± SE (Standard Error), not ± SD
 - Next: VESSEL-1035 (Replace fabricated CM with real Kassab Tables 6-8 + per-artery params)
+
+### 2026-03-06: VESSEL-1035 [PASS]
+- Story: Replace fabricated CM with real Kassab Tables 6-8 + per-artery params
+- Attempted: Replace ALL fabricated morphometric data in parameters.jl with verified Kassab 1993 values
+- Result: DONE — 23,033 tests passing (was 21,200 before)
+- Changes:
+  1. **MorphometricParams struct**: Added 7 new fields — artery_name, diameter_mean_elem, diameter_sd_elem, length_mean_elem, length_sd_elem, se_ratio, element_count_target
+  2. **kassab_rca_params()**: Real RCA data from Tables 1, 5, 6, 9 (12 orders)
+  3. **kassab_lad_params()**: Real LAD data from Tables 2, 5, 7, 9 (12 orders)
+  4. **kassab_lcx_params()**: Real LCX data from Tables 3, 5, 8, 9 (11 orders — LCX has fewer)
+  5. **kassab_coronary_params()**: Now an alias for kassab_rca_params()
+  6. **Diameter bounds**: Computed from real data using Eq 3A/3B (Jiang 1994)
+  7. **subdivide_terminals!**: Added max_order kwarg to prevent subdivision of root continuation terminals
+  8. **generate_kassab_coronary**: Passes max_order=handoff_order to subdivision
+  9. **validation.jl**: Updated CM column sum check (higher orders have sums >> 3); diagonal dominance check excludes top 2 orders
+  10. Updated all tests: test_parameters.jl, test_kassab.jl, test_pipeline.jl, test_validation_kassab.jl
+  11. Updated examples/custom_vasculature.jl for new struct fields
+- Key data changes:
+  - RCA order 1 segment D: 15.0→9.6μm, L: 50→69μm
+  - RCA order 11 segment D: 4500→3218μm, L: 150000→3240μm
+  - CM[1,2] (order 0 from order 1): 2.3→2.75
+  - LCX now has 11 orders (n_orders=11), not 12
+  - Diameter bounds start at 0.0 (not 5.0) per Jiang 1994
+- Bug found and fixed: Without max_order, root continuation terminal at order 11 got subdivided, producing 486K segments and overflowing capacity
+- Next: VESSEL-1036 (Implement diameter-defined Strahler ordering)

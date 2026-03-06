@@ -19,7 +19,7 @@
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 4 },
     "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 6 },
-    "P10": { "name": "Exact Kassab Parity", "stories": 10, "done": 1 }
+    "P10": { "name": "Exact Kassab Parity", "stories": 10, "done": 2 }
   },
   "stories": [
 
@@ -720,7 +720,8 @@
       "id": "VESSEL-1035",
       "title": "Replace fabricated CM with real Kassab Tables 6-8 + per-artery params",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Replaced ALL fabricated data with real Kassab 1993 values. Added 7 new fields to MorphometricParams. Created kassab_rca_params(), kassab_lad_params(), kassab_lcx_params(). Fixed subdivision overflow with max_order kwarg. 23033 tests passing.",
       "priority": 9,
       "milestone": "P10",
       "blockedBy": ["VESSEL-1034"],

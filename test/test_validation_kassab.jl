@@ -57,9 +57,9 @@ using Distributions
         # Diagonal entries should be dominant in each column
         @test audit[:diagonal_dominant]
 
-        # Verify specific column sums match research data
-        @test col_sums[1] ≈ 2.3 atol=0.01  # parent order 1
-        @test col_sums[2] ≈ 2.1 atol=0.01  # parent order 2
+        # Verify specific column sums match real Kassab 1993 Table 6 (RCA)
+        @test col_sums[1] ≈ 2.881 atol=0.01  # parent order 1: CM[1,2]+CM[2,2]
+        @test col_sums[2] ≈ 2.884 atol=0.01  # parent order 2: CM[1,3]+CM[2,3]+CM[3,3]
     end
 
     @testset "Diameter KS per order" begin

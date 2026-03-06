@@ -581,7 +581,7 @@ function generate_kassab_coronary(
     end
 
     for (name, tree) in trees
-        subdivide_terminals!(tree, params; rng=rng)
+        subdivide_terminals!(tree, params; rng=rng, max_order=handoff_order)
         if verbose
             println("  $(name): $(tree.segments.n) segments after subdivision")
         end

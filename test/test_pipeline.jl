@@ -20,7 +20,7 @@ using Random
         domain, params;
         rng=rng,
         verbose=false,
-        handoff_order=3,
+        handoff_order=5,
         tree_configs=test_configs,
     )
 

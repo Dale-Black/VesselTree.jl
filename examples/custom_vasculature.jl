@@ -11,14 +11,6 @@ println("=== VesselTree.jl: Custom Vasculature Example ===\n")
 base = kassab_coronary_params()
 
 # Create cerebral-like parameters with fewer orders and smaller vessels
-# MorphometricParams fields (positional):
-#   gamma, diameter_mean, diameter_sd, length_mean, length_sd,
-#   diameter_bounds, connectivity_matrix,
-#   asymmetry_alpha, asymmetry_beta,
-#   trifurcation_chi_th, sprouting_rho_th,
-#   blood_viscosity, root_pressure, terminal_pressure,
-#   vessel_cutoff_um, n_orders
-
 n_ord = 8
 diam_mean = [8.0, 15.0, 30.0, 60.0, 120.0, 250.0, 500.0, 1000.0]
 diam_sd = [1.0, 3.0, 6.0, 12.0, 25.0, 50.0, 100.0, 200.0]
@@ -30,12 +22,23 @@ for i in 1:(n_ord - 1)
 end
 push!(diam_bounds, diam_mean[end] * 2.0)
 
+# Use segment data as element estimates (simple approximation for custom vasculature)
+len_mean = [20.0, 40.0, 100.0, 250.0, 600.0, 1500.0, 4000.0, 10000.0]
+len_sd = [5.0, 10.0, 25.0, 60.0, 150.0, 400.0, 1000.0, 2500.0]
+
 custom_params = MorphometricParams(
+    "MCA",
     base.gamma,
     diam_mean,
     diam_sd,
-    [20.0, 40.0, 100.0, 250.0, 600.0, 1500.0, 4000.0, 10000.0],
-    [5.0, 10.0, 25.0, 60.0, 150.0, 400.0, 1000.0, 2500.0],
+    len_mean,
+    len_sd,
+    diam_mean,           # element diameters ≈ segment diameters
+    diam_sd,
+    len_mean,            # element lengths ≈ segment lengths
+    len_sd,
+    ones(n_ord),         # S/E ratio = 1 (no series segments assumed)
+    zeros(n_ord),        # no target element counts
     diam_bounds,
     base.connectivity_matrix[1:n_ord, 1:n_ord],
     base.asymmetry_alpha,
