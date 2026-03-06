@@ -11,7 +11,7 @@
   "milestones": {
     "P0": { "name": "Discovery", "stories": 4, "done": 4 },
     "P1": { "name": "Foundation", "stories": 3, "done": 3 },
-    "P2": { "name": "CCO Engine", "stories": 5, "done": 2 },
+    "P2": { "name": "CCO Engine", "stories": 5, "done": 3 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
     "P4": { "name": "Kassab Constraints", "stories": 3, "done": 0 },
     "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 0 },
@@ -204,7 +204,8 @@
       "id": "VESSEL-1009",
       "title": "Kamiya bifurcation point optimization",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Surface cost function (r*l proportional), golden section search for optimal bifurcation t along segment. AK.foreachindex kernel evaluates all connections in parallel. select_best_connection via AK.minimum + linear argmin scan. Murray's law radii (symmetric + asymmetric). 224 Kamiya tests (2787 total).",
       "priority": 2,
       "milestone": "P2",
       "blockedBy": ["VESSEL-1001", "VESSEL-1007"],

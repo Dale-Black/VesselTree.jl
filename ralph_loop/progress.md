@@ -170,3 +170,17 @@
   - AK.any(identity, bool_view) works correctly for intersection reduction
   - check_domain_crossing samples interior points (not endpoints) to detect boundary crossing
 - Next: VESSEL-1009 (Kamiya bifurcation point optimization)
+
+### 2026-03-05: VESSEL-1009 [PASS]
+- Attempted: Implement Kamiya bifurcation point optimization with surface cost
+- Result: 224 new tests pass (2787 total), all acceptance criteria met
+- Regression gate: 2787 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/kamiya.jl — surface_cost_at_t, optimize_bifurcation_point (golden section), evaluate_all_connections! (AK.foreachindex), select_best_connection (AK.minimum + scan)
+  - test/test_kamiya.jl — 11 testsets with 224 tests
+- Learning:
+  - AK.mapreduce doesn't support UnitRange — must use concrete arrays or AK.minimum + manual argmin
+  - Surface cost minimum isn't at segment midpoint even for perpendicular terminal — parent radius dominates
+  - Golden section search converges in ~20 iterations to high precision
+  - Murray's law: r_parent^gamma = r_left^gamma + r_right^gamma verified for both symmetric and asymmetric splits
+- Next: VESSEL-1010 (Core CCO growth loop + Murray's law propagation)

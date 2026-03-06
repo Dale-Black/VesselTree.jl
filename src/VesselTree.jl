@@ -22,6 +22,7 @@ include("parameters.jl")
 include("domain.jl")
 include("distance.jl")
 include("intersection.jl")
+include("kamiya.jl")
 
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
@@ -32,5 +33,8 @@ export point_segment_distance, point_segment_distance_sq
 export compute_all_distances!, find_nearest_segments
 export segments_intersect, segments_min_distance_sq
 export check_intersections!, has_any_intersection, check_domain_crossing
+export surface_cost_at_t, optimize_bifurcation_point
+export evaluate_all_connections!, select_best_connection
+export compute_radii_symmetric, compute_radii_asymmetric
 
 end # module VesselTree
