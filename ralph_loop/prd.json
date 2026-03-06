@@ -17,7 +17,7 @@
     "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 3 },
     "P6": { "name": "Validation", "stories": 2, "done": 2 },
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
-    "P8": { "name": "Export & Integration", "stories": 4, "done": 3 },
+    "P8": { "name": "Export & Integration", "stories": 4, "done": 4 },
     "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 6 }
   },
   "stories": [
@@ -551,7 +551,7 @@
       "id": "VESSEL-1027",
       "title": "End-to-end demo + documentation",
       "type": "VERIFY",
-      "status": "open",
+      "status": "done",
       "priority": 8,
       "milestone": "P8",
       "blockedBy": ["VESSEL-1021", "VESSEL-1023", "VESSEL-1024", "VESSEL-1025"],

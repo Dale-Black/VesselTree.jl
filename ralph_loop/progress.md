@@ -582,3 +582,32 @@
   - For development testing, CairoMakie must be available in user's environment or a stacked environment
   - Conditional testing with try/catch @eval using CairoMakie works for optional extension tests
 - Next: VESSEL-1027 (End-to-end demo + documentation)
+
+### 2026-03-06: VESSEL-1027 [PASS]
+- Attempted: Create end-to-end demo scripts and run 5000-terminal validation
+- Result: All examples run end-to-end, all 21200 tests pass, P8 milestone complete
+- Regression gate: 21200 tests pass, 0 fail, 0 error
+- Files created:
+  - examples/basic_tree.jl — single tree (100 terminals), validation report, all export formats
+  - examples/coronary_forest.jl — 3-tree LAD/LCX/RCA forest, per-tree validation, VTP export
+  - examples/custom_vasculature.jl — custom MorphometricParams for cerebral-like tree (8 orders)
+- 5000-terminal validation (LAD=2000, LCX=1200, RCA=1600, handoff_order=9):
+  - Total: 386,391 segments in 473s (CCO 471.6s, subdivision 0.3s, refinement 0.6s)
+  - CCO bottleneck: inter-tree collision checking scales with total segment count across all trees
+  - LAD report card (110,825 segments):
+    - Diameter KS: 1/12 orders pass — order 10 only (small sample, n=36)
+    - Length KS: 0/12 pass
+    - Connectivity chi2: 21910, p=0.0
+    - Asymmetry KS: D=0.081, p=0.0, median=0.786 (close to Kassab 0.76)
+    - Murray deviation: PASS (mean=0.0, max=0.0 — exact)
+    - Orders populated: PASS (12/12 orders)
+    - Trifurcation: 45.1%
+    - Overall: 2/6 metrics pass
+  - Diameter means track Kassab well across all orders (8.7, 15.6, 30.5, 57.4, 102.6, 183.1, 326.1, 577.8, 1016.5, 1795.1, 3361.2, 6456.6 um)
+  - KS failures due to apply_full_kassab_radii! shifting distributions + floor clamping — means correct but shapes differ
+- Learning:
+  - ValidationReport has diameter_ks_pvalues field (not diameter_mean_per_order)
+  - MorphometricParams is a plain struct (no @kwdef) — must use positional construction
+  - 5000-terminal multi-tree CCO is slow (~8min) due to O(n) inter-tree collision checking per candidate
+  - Subdivision is negligible even for 386K segments (<1s)
+- Status: ALL milestones complete (P0-P9, 34/34 stories done)
