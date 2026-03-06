@@ -46,5 +46,6 @@ export SpatialGrid, build_grid, query_nearby
 export compute_resistances!, compute_flows!, compute_pressures!, validate_hemodynamics
 export assign_terminal_flows!, recompute_radii_from_flow!
 export assign_strahler_orders!, sample_asymmetry, compute_daughter_radii, apply_kassab_radii!
+export build_empirical_connectivity, validate_connectivity, constrain_connectivity!
 
 end # module VesselTree

@@ -110,3 +110,155 @@ function apply_kassab_radii!(
 
     return nothing
 end
+
+"""
+    build_empirical_connectivity(tree::VascularTree, params::MorphometricParams) -> Matrix{Float64}
+
+Build empirical connectivity matrix from tree.
+CM[daughter_order+1, parent_order+1] = count of order-(daughter_order) daughters
+per order-(parent_order) parent. Strahler orders must already be assigned.
+"""
+function build_empirical_connectivity(tree::VascularTree, params::MorphometricParams)
+    topo = tree.topology
+    seg = tree.segments
+    n = seg.n
+    n_orders = params.n_orders
+
+    CM = zeros(Float64, n_orders, n_orders)
+
+    # sequential: scan all bifurcations and record parent-daughter order pairs
+    for i in 1:n
+        if topo.junction_type[i] == :bifurcation || topo.junction_type[i] == :trifurcation
+            p_order = Int(topo.strahler_order[i])
+            p_order < 0 && continue
+
+            children = get_children(topo, Int32(i))
+            for cid in children
+                d_order = Int(topo.strahler_order[cid])
+                d_order < 0 && continue
+                if d_order < n_orders && p_order < n_orders
+                    CM[d_order + 1, p_order + 1] += 1.0
+                end
+            end
+        end
+    end
+
+    return CM
+end
+
+"""
+    validate_connectivity(empirical::Matrix{Float64}, reference::Matrix{Float64}) -> (chi2, p_value)
+
+Chi-squared test comparing empirical connectivity matrix to Kassab reference.
+Returns (chi2_statistic, p_value). Only counts cells where reference > 0.
+"""
+function validate_connectivity(empirical::Matrix{Float64}, reference::Matrix{Float64})
+    chi2 = 0.0
+    dof = 0
+
+    for j in axes(reference, 2)
+        # Normalize column to get probabilities
+        ref_col_sum = sum(reference[:, j])
+        emp_col_sum = sum(empirical[:, j])
+        ref_col_sum <= 0 && continue
+        emp_col_sum <= 0 && continue
+
+        for i in axes(reference, 1)
+            expected = reference[i, j] / ref_col_sum * emp_col_sum
+            expected < 0.5 && continue  # skip sparse cells
+
+            observed = empirical[i, j]
+            chi2 += (observed - expected)^2 / expected
+            dof += 1
+        end
+    end
+
+    dof = max(dof - 1, 1)
+
+    # Approximate p-value using chi-squared distribution
+    d = Chisq(dof)
+    p_val = 1.0 - cdf(d, chi2)
+
+    return (chi2, p_val)
+end
+
+"""
+    constrain_connectivity!(tree::VascularTree, params::MorphometricParams)
+
+Post-hoc adjustment: for each bifurcation, check if the parent-daughter order
+combination is valid (has nonzero entry in Kassab connectivity matrix).
+If invalid, adjust daughter radius to the nearest valid order.
+Then propagate via Murray's law.
+"""
+function constrain_connectivity!(tree::VascularTree, params::MorphometricParams)
+    topo = tree.topology
+    seg = tree.segments
+    n = seg.n
+    gamma = params.gamma
+    n_orders = params.n_orders
+
+    # First ensure orders are assigned
+    assign_strahler_orders!(tree, params)
+
+    CM = params.connectivity_matrix
+    changed = false
+
+    # sequential: scan all bifurcations
+    for i in 1:n
+        if topo.junction_type[i] != :bifurcation
+            continue
+        end
+
+        p_order = Int(topo.strahler_order[i])
+        p_order < 1 && continue  # order 0 parents have no children in connectivity matrix
+
+        children = get_children(topo, Int32(i))
+        for cid in children
+            d_order = Int(topo.strahler_order[cid])
+            d_order < 0 && continue
+
+            # Check if this combination has nonzero probability in Kassab matrix
+            if p_order < n_orders && d_order < n_orders
+                if CM[d_order + 1, p_order + 1] <= 0.0
+                    # Invalid combination — find nearest valid daughter order
+                    best_order = _find_nearest_valid_order(CM, p_order, d_order, n_orders)
+                    if best_order >= 0 && best_order != d_order
+                        # Set daughter radius to mean diameter of target order
+                        target_diam_um = params.diameter_mean[best_order + 1]
+                        seg.radius[cid] = target_diam_um / 2.0 / 1000.0  # um → mm
+                        changed = true
+                    end
+                end
+            end
+        end
+    end
+
+    # Re-propagate Murray's law if any changes were made
+    if changed
+        update_radii!(tree, gamma)
+    end
+
+    return nothing
+end
+
+"""
+    _find_nearest_valid_order(CM, parent_order, current_order, n_orders) -> Int
+
+Find the nearest valid daughter order for a given parent order.
+"""
+function _find_nearest_valid_order(CM::Matrix{Float64}, parent_order::Int, current_order::Int, n_orders::Int)
+    p_col = parent_order + 1
+    p_col > n_orders && return current_order
+
+    # Search outward from current order
+    for delta in 0:(n_orders-1)
+        for candidate in [current_order - delta, current_order + delta]
+            if 0 <= candidate < n_orders
+                if CM[candidate + 1, p_col] > 0.0
+                    return candidate
+                end
+            end
+        end
+    end
+    return current_order
+end

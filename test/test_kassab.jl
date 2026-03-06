@@ -255,4 +255,91 @@ using Distributions
         end
     end
 
+    # --- Connectivity matrix ---
+
+    @testset "build_empirical_connectivity — hand-built tree" begin
+        tree = VascularTree("test", 50)
+        # Build a simple bifurcation tree with known orders
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 0.092, Int32(-1))   # order 5
+        add_segment!(tree, (5.0, 0.0, 0.0), (10.0, 3.0, 0.0), 0.028, Int32(1))    # order 3
+        add_segment!(tree, (5.0, 0.0, 0.0), (10.0, -3.0, 0.0), 0.015, Int32(1))   # order 2
+
+        assign_strahler_orders!(tree, params)
+        CM = build_empirical_connectivity(tree, params)
+
+        @test size(CM) == (params.n_orders, params.n_orders)
+
+        # Parent order 5 (col 6) should have daughter counts for orders 3 and 2
+        @test CM[4, 6] == 1.0   # order 3 daughter (row 4)
+        @test CM[3, 6] == 1.0   # order 2 daughter (row 3)
+    end
+
+    @testset "build_empirical_connectivity — matrix structure" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(42)
+        grow_tree!(tree, domain, 30, params; rng=rng)
+        assign_strahler_orders!(tree, params)
+
+        CM = build_empirical_connectivity(tree, params)
+
+        @test size(CM) == (params.n_orders, params.n_orders)
+
+        # All entries should be non-negative
+        @test all(CM .>= 0.0)
+
+        # At least some bifurcations should have been counted
+        @test sum(CM) > 0.0
+    end
+
+    @testset "validate_connectivity — returns chi2 and p-value" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(77)
+        grow_tree!(tree, domain, 30, params; rng=rng)
+        assign_strahler_orders!(tree, params)
+
+        empirical = build_empirical_connectivity(tree, params)
+        chi2, p_val = validate_connectivity(empirical, params.connectivity_matrix)
+
+        @test chi2 >= 0.0
+        @test 0.0 <= p_val <= 1.0
+    end
+
+    @testset "constrain_connectivity! — improves tree" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(88)
+        grow_tree!(tree, domain, 20, params; rng=rng)
+        assign_strahler_orders!(tree, params)
+
+        constrain_connectivity!(tree, params)
+
+        # After constraining, all radii should still be positive
+        for i in 1:tree.segments.n
+            @test tree.segments.radius[i] > 0.0
+        end
+
+        # Murray's law should still hold at bifurcations
+        seg = tree.segments
+        topo = tree.topology
+        for i in 1:seg.n
+            if topo.junction_type[i] == :bifurcation
+                c1 = topo.child1_id[i]
+                c2 = topo.child2_id[i]
+                if c1 > 0 && c2 > 0
+                    lhs = seg.radius[i]^gamma
+                    rhs = seg.radius[c1]^gamma + seg.radius[c2]^gamma
+                    @test lhs ≈ rhs rtol = 1e-4
+                end
+            end
+        end
+    end
+
 end

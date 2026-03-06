@@ -259,3 +259,18 @@
   - apply_kassab_radii! does top-down asymmetry assignment then bottom-up Murray's law propagation
   - compute_daughter_radii: r_large = r_parent / (1 + asymmetry^gamma)^(1/gamma)
 - Next: VESSEL-1015 (Kassab: Connectivity matrix validation)
+
+### 2026-03-05: VESSEL-1015 [PASS]
+- Attempted: Implement connectivity matrix construction and validation against Kassab 1993
+- Result: 24 new tests pass (3954 total), all acceptance criteria met
+- Regression gate: 3954 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/kassab.jl — build_empirical_connectivity, validate_connectivity (chi-squared), constrain_connectivity!, _find_nearest_valid_order
+  - test/test_kassab.jl — 4 new testsets for connectivity matrix
+  - src/VesselTree.jl — new exports
+- Learning:
+  - CCO-generated trees have very small segments classified as order 0 that can be parents (unlike real vasculature)
+  - Chi-squared test only meaningful for cells with expected count >= 0.5 (sparse cells skipped)
+  - constrain_connectivity! adjusts daughter radius to mean diameter of nearest valid order
+  - Chisq distribution from Distributions.jl used for p-value computation
+- Next: VESSEL-1016 (Kassab: Integrated constraint enforcement in growth loop)
