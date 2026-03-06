@@ -55,5 +55,6 @@ export compute_trifurcation_angles, check_trifurcation_merge, merge_to_trifurcat
 export ValidationReport, validate_tree, print_report
 export TreeConfig, TerritoryMap, initialize_territories, query_territory
 export sample_in_territory, check_inter_tree_collision, coronary_tree_configs
+export CoronaryForest, generate_coronary_forest, validate_forest
 
 end # module VesselTree

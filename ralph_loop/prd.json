@@ -16,7 +16,7 @@
     "P4": { "name": "Kassab Constraints", "stories": 3, "done": 3 },
     "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 3 },
     "P6": { "name": "Validation", "stories": 2, "done": 2 },
-    "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 1 },
+    "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 0 }
   },
   "stories": [
@@ -477,7 +477,7 @@
       "id": "VESSEL-1023",
       "title": "Multi-tree forest growth (LAD + LCX + RCA)",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
       "priority": 7,
       "milestone": "P7",
       "blockedBy": ["VESSEL-1022"],

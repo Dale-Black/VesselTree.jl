@@ -157,3 +157,173 @@ function coronary_tree_configs()
         TreeConfig("RCA", (2.0, 0.0, 0.0), 1.3, (0.0, -1.0, 0.0), 800, 0.35),
     ]
 end
+
+"""
+    CoronaryForest
+
+Holds multiple vascular trees with territory partitioning.
+"""
+struct CoronaryForest
+    trees::Dict{String, VascularTree}
+    territory_map::TerritoryMap
+    params::MorphometricParams
+end
+
+"""
+    generate_coronary_forest(domain, params; tree_configs, rng) -> CoronaryForest
+
+Generate a multi-tree forest via round-robin growth. Each tree grows in its
+assigned territory, with inter-tree collision avoidance.
+"""
+function generate_coronary_forest(
+    domain::AbstractDomain,
+    params::MorphometricParams;
+    tree_configs::Vector{TreeConfig}=coronary_tree_configs(),
+    rng::AbstractRNG=Random.default_rng(),
+    verbose::Bool=false,
+    kassab::Bool=true,
+)
+    gamma = params.gamma
+    tmap = initialize_territories(domain, tree_configs)
+
+    # Create trees and add root segments
+    trees = Dict{String, VascularTree}()
+    capacity_per_tree = maximum(cfg.target_terminals for cfg in tree_configs) * 3
+    for cfg in tree_configs
+        tree = VascularTree(cfg.name, capacity_per_tree)
+        # Root segment: from root_position in root_direction
+        dx, dy, dz = cfg.root_direction
+        dlen = sqrt(dx^2 + dy^2 + dz^2)
+        if dlen > 0
+            dx /= dlen; dy /= dlen; dz /= dlen
+        else
+            dx, dy, dz = 1.0, 0.0, 0.0
+        end
+        root_len = cfg.root_radius * 5.0  # root segment length proportional to radius
+        distal = (
+            cfg.root_position[1] + dx * root_len,
+            cfg.root_position[2] + dy * root_len,
+            cfg.root_position[3] + dz * root_len,
+        )
+        add_segment!(tree, cfg.root_position, distal, cfg.root_radius, Int32(-1))
+        trees[cfg.name] = tree
+    end
+
+    # Round-robin growth
+    terminal_radius = params.diameter_mean[1] / 2.0 / 1000.0
+    max_rounds = maximum(cfg.target_terminals for cfg in tree_configs) * 50
+    added = Dict(cfg.name => 0 for cfg in tree_configs)
+
+    # Pre-allocate buffers per tree
+    buffers = Dict{String, NamedTuple}()
+    for cfg in tree_configs
+        cap = capacity_per_tree
+        buffers[cfg.name] = (
+            distances = zeros(cap),
+            costs = zeros(cap),
+            bifurc_t = zeros(cap),
+            intersect = Vector{Bool}(undef, cap),
+        )
+    end
+
+    round = 0
+    while round < max_rounds
+        round += 1
+        all_done = true
+
+        for cfg in tree_configs
+            added[cfg.name] >= cfg.target_terminals && continue
+            all_done = false
+
+            tree = trees[cfg.name]
+            buf = buffers[cfg.name]
+            n = tree.segments.n
+
+            # Domain size for adaptive thresholding
+            domain_size = domain isa SphereDomain ? domain.radius : 10.0
+
+            d_thresh = domain_size / (10.0 * (n + 1)^(1.0 / 3.0))
+
+            # Sample in territory
+            pt = sample_in_territory(domain, tmap, cfg.name, rng)
+            pt === nothing && continue
+
+            tx, ty, tz = pt
+
+            # Check inter-tree collision
+            collision = false
+            for (other_name, other_tree) in trees
+                other_name == cfg.name && continue
+                if check_inter_tree_collision((tx, ty, tz), other_tree, d_thresh)
+                    collision = true
+                    break
+                end
+            end
+            collision && continue
+
+            # Find best connection
+            evaluate_all_connections!(buf.costs, buf.bifurc_t, tree.segments, n, tx, ty, tz, gamma)
+            seg_idx, t_opt, _ = select_best_connection(buf.costs, buf.bifurc_t, n)
+
+            # Bifurcation point
+            bx = tree.segments.proximal_x[seg_idx] + t_opt * (tree.segments.distal_x[seg_idx] - tree.segments.proximal_x[seg_idx])
+            by = tree.segments.proximal_y[seg_idx] + t_opt * (tree.segments.distal_y[seg_idx] - tree.segments.proximal_y[seg_idx])
+            bz = tree.segments.proximal_z[seg_idx] + t_opt * (tree.segments.distal_z[seg_idx] - tree.segments.proximal_z[seg_idx])
+
+            # Self-intersection check
+            check_intersections!(buf.intersect, tree.segments, bx, by, bz, tx, ty, tz, d_thresh * 0.1, n)
+            buf.intersect[seg_idx] = false
+            has_any_intersection(buf.intersect, n) && continue
+
+            # Domain crossing
+            check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz)) && continue
+
+            # Add bifurcation
+            cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radius)
+
+            if kassab
+                parent_radius = tree.segments.radius[seg_idx]
+                asymmetry = sample_asymmetry(params, rng)
+                r_large, r_small = compute_daughter_radii(parent_radius, asymmetry, gamma)
+                tree.segments.radius[cont_id] = r_large
+                tree.segments.radius[new_id] = r_small
+            end
+
+            update_radii!(tree, gamma)
+            added[cfg.name] += 1
+        end
+
+        all_done && break
+    end
+
+    if verbose
+        for cfg in tree_configs
+            println("  $(cfg.name): $(added[cfg.name]) / $(cfg.target_terminals) terminals, $(trees[cfg.name].segments.n) segments")
+        end
+    end
+
+    return CoronaryForest(trees, tmap, params)
+end
+
+"""
+    validate_forest(forest, params) -> Dict{Symbol, Any}
+
+Validate a multi-tree forest. Returns a dict with per-tree and inter-tree metrics.
+"""
+function validate_forest(forest::CoronaryForest, params::MorphometricParams)
+    report = Dict{Symbol, Any}()
+
+    total_segments = 0
+    tree_reports = Dict{String, ValidationReport}()
+
+    for (name, tree) in forest.trees
+        total_segments += tree.segments.n
+        tree_reports[name] = validate_tree(tree, params)
+    end
+
+    report[:total_segments] = total_segments
+    report[:tree_reports] = tree_reports
+    report[:n_trees] = length(forest.trees)
+
+    return report
+end
