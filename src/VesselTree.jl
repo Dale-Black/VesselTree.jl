@@ -26,6 +26,7 @@ include("kamiya.jl")
 include("murray.jl")
 include("spatial.jl")
 include("growth.jl")
+include("hemodynamics.jl")
 
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
@@ -41,5 +42,6 @@ export evaluate_all_connections!, select_best_connection
 export compute_radii_symmetric, compute_radii_asymmetric
 export update_radii!, grow_tree!, add_bifurcation!
 export SpatialGrid, build_grid, query_nearby
+export compute_resistances!, compute_flows!, compute_pressures!, validate_hemodynamics
 
 end # module VesselTree

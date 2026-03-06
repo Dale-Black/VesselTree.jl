@@ -213,3 +213,19 @@
   - Cell neighborhood search radius = ceil(search_radius / cell_size) cells in each direction
   - Query returns all segments in neighboring cells; caller does exact distance filtering
 - Next: VESSEL-1012 (Hemodynamics: Poiseuille resistance + pressure/flow)
+
+### 2026-03-05: VESSEL-1012 [PASS]
+- Attempted: Implement hemodynamic computations (Poiseuille resistance, flow, pressure, validation)
+- Result: 607 new tests pass (3471 total), all acceptance criteria met
+- Regression gate: 3471 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/hemodynamics.jl — compute_resistances! (AK.foreachindex), _topo_order (BFS), compute_flows!, compute_pressures!, validate_hemodynamics
+  - test/test_hemodynamics.jl — 16 testsets with 607 tests (including 500-segment AK verification and CCO-grown tree integration)
+  - src/VesselTree.jl — include + exports for hemodynamics
+- Learning:
+  - Generation-based traversal breaks after add_bifurcation! because child generations are not updated when reparented to continuation segment. BFS from root is the correct approach.
+  - Flow splits inversely proportional to subtree resistance (conductance-weighted), not equally among terminals
+  - Subtree resistance: R_sub = R_self + 1/(sum of child conductances) for bifurcation, R_self for terminal
+  - Total flow = (P_root - P_term) / R_total_tree; pressures computed top-down as P_distal = P_proximal - Q*R
+  - Poiseuille formula R = 8*mu*L/(pi*r^4) implemented as AK kernel; r^4 scaling means small radius changes have huge resistance effects
+- Next: VESSEL-1013 (Flow-weighted radius assignment)
