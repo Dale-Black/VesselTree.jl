@@ -338,3 +338,19 @@
   - With barabasi=true, intersection checks may reject more candidates (rotated segments can intersect)
   - Angle distribution from grown trees is measurable; mean angle is reasonable
 - Next: VESSEL-1020 (Validation framework + diameter/asymmetry tests)
+
+### 2026-03-05: VESSEL-1020 [PASS]
+- Attempted: Implement validation framework with diameter, asymmetry, L/D, and angle statistics
+- Result: 130 new tests pass (4457 total), all acceptance criteria met
+- Regression gate: 4457 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/validation.jl — ValidationReport, compute_diameters! (AK), compute_ld_ratios! (AK), compute_asymmetry_ratios, compute_branching_angles, validate_tree, print_report
+  - test/test_validation.jl — 11 testsets with 130 tests
+  - src/VesselTree.jl — include + exports
+  - test/runtests.jl — include test_validation.jl
+- Learning:
+  - AK.foreachindex for bulk diameter and L/D computation works cleanly
+  - Asymmetry and angle computation sequential (iterate bifurcations only)
+  - Approximate z-test p-value for diameter validation (full KS would need HypothesisTests.jl)
+  - ValidationReport uses @kwdef for convenient construction
+- Next: VESSEL-1021 (Full validation suite: connectivity + trifurcation + P(lambda))

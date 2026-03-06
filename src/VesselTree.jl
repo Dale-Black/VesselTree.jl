@@ -29,6 +29,7 @@ include("growth.jl")
 include("hemodynamics.jl")
 include("kassab.jl")
 include("barabasi.jl")
+include("validation.jl")
 
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
@@ -50,5 +51,6 @@ export assign_strahler_orders!, sample_asymmetry, compute_daughter_radii, apply_
 export build_empirical_connectivity, validate_connectivity, constrain_connectivity!
 export compute_chi, compute_rho, classify_junction, compute_junction_angles, apply_junction_geometry!
 export compute_trifurcation_angles, check_trifurcation_merge, merge_to_trifurcation!, apply_trifurcation_geometry!
+export ValidationReport, validate_tree, print_report
 
 end # module VesselTree
