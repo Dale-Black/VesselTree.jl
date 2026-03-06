@@ -43,3 +43,20 @@
   - `AK.any(identity, bool_array)` is the pattern for intersection detection
   - Pre-allocate index arrays for mapreduce-based argmin to avoid GC pressure
 - Next: VESSEL-1001 (OpenCCO algorithm deep-dive) or other P0 discovery stories
+
+### 2026-03-05: VESSEL-1001 [PASS]
+- Attempted: Deep-dive into OpenCCO C++ codebase and IPOL paper for CCO algorithm
+- Result: Complete algorithm documented with all equations, pseudocode, data structures, and scaling analysis
+- Regression gate: N/A (discovery story, no source code)
+- Learning:
+  - CCO uses volume minimization; we'll use surface minimization (Barabasi)
+  - OpenCCO defaults to gamma=3.0; we use 7/3 (Huo-Kassab)
+  - Kamiya optimization solves a 2x2 nonlinear system — can use simple Newton instead of Ceres
+  - Key bottleneck is O(k^2) scaling from brute-force intersection checking — spatial indexing essential
+  - OpenCCO stores only distal points (proximal = parent's distal); we store both for AK parallelism
+  - Deepcopy for each candidate is expensive; use undo/rollback instead
+  - Distance threshold shrinks by 0.9x if no valid point found after max_trials
+  - Degenerate check: 2*r <= l (diameter must not exceed segment length)
+  - OpenCCO demonstrates up to 20K terminals; our target is 2M (100x more)
+  - Length factor approach: scale distances rather than moving points (avoids O(k) coordinate updates)
+- Next: VESSEL-1002 (Kassab morphometry) or VESSEL-1003 (Barabasi surface optimization)

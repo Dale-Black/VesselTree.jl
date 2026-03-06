@@ -9,7 +9,7 @@
     "science": "CCO growth + Kassab morphometry (gamma=7/3, asymmetry Beta(2.5,0.8)) + Barabasi surface optimization (chi/rho thresholds at 0.83)"
   },
   "milestones": {
-    "P0": { "name": "Discovery", "stories": 4, "done": 1 },
+    "P0": { "name": "Discovery", "stories": 4, "done": 2 },
     "P1": { "name": "Foundation", "stories": 3, "done": 0 },
     "P2": { "name": "CCO Engine", "stories": 5, "done": 0 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
@@ -44,7 +44,8 @@
       "id": "VESSEL-1001",
       "title": "DISCOVERY: OpenCCO algorithm deep-dive",
       "type": "DISCOVERY",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Full algorithm documented from IPOL paper + source code. Step-by-step growth loop, Kamiya optimization with equations, intersection testing, cost function, radius propagation, data structure, and scaling analysis. Key differences from VesselTree identified (SoA vs AoS, surface vs volume cost, gamma=7/3 vs 3.0, trifurcation support).",
       "priority": 0,
       "milestone": "P0",
       "blockedBy": [],
