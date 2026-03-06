@@ -417,3 +417,21 @@
   - search_radius = d_thresh * 5.0 provides good coverage; falls back to brute force if too few candidates
   - _domain_size helper extracts domain sizing logic shared between grow_tree! and generate_coronary_forest
 - Next: VESSEL-1029 (Statistical subdivision engine)
+
+### 2026-03-05: VESSEL-1029 [PASS]
+- Attempted: Implement statistical subdivision engine using Kassab connectivity matrix
+- Result: 77 new tests pass (6471 total), all acceptance criteria met
+- Regression gate: 6471 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/subdivision.jl — estimate_total_segments, estimate_subdivision_capacity, subdivide_terminals!, _subdivide_recursive!, _add_subdivision_daughter!, _random_daughter_direction
+  - src/VesselTree.jl — include + exports
+  - test/test_subdivision.jl — 12 testsets with 77 tests
+  - test/runtests.jl — include test_subdivision.jl
+- Learning:
+  - Poisson sampling for daughter counts preserves CM expected values; round() loses too many small entries
+  - Cascading bifurcations needed when Poisson gives >3 daughters: use slot-aware approach checking actual child count before each add
+  - E[S(5)] ≈ 78, E[S(7)] ≈ 259, E[S(11)] ≈ 1506 segments per terminal with current CM values
+  - CM values are conservative; full 6M segments would need larger CM entries or more CCO terminals
+  - _find_perpendicular from barabasi.jl reused for direction computation
+  - add_segment! errors at 4th child — must cascade before 3rd child used up
+- Next: VESSEL-1030 (Post-hoc Kassab radius refinement)

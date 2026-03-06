@@ -18,7 +18,7 @@
     "P6": { "name": "Validation", "stories": 2, "done": 2 },
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 0 },
-    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 1 }
+    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 2 }
   },
   "stories": [
 
@@ -590,7 +590,8 @@
       "id": "VESSEL-1029",
       "title": "Statistical subdivision engine (connectivity matrix)",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "subdivide_terminals! with Poisson-sampled daughter counts per Kassab CM. Cascading bifurcations for >3 daughters. estimate_total_segments for capacity planning. 77 new tests, 6471 total passing.",
       "priority": 7,
       "milestone": "P9",
       "blockedBy": [],
