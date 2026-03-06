@@ -11,7 +11,7 @@
   "milestones": {
     "P0": { "name": "Discovery", "stories": 4, "done": 4 },
     "P1": { "name": "Foundation", "stories": 3, "done": 3 },
-    "P2": { "name": "CCO Engine", "stories": 5, "done": 0 },
+    "P2": { "name": "CCO Engine", "stories": 5, "done": 1 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
     "P4": { "name": "Kassab Constraints", "stories": 3, "done": 0 },
     "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 0 },
@@ -164,7 +164,8 @@
       "id": "VESSEL-1007",
       "title": "AK-accelerated distance kernels",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Scalar point_segment_distance/sq functions for all geometric cases (on-segment, perpendicular, endpoint, zero-length). AK-accelerated compute_all_distances! using foreachindex. find_nearest_segments via AK.sortperm. Verified AK matches scalar loop on 1000 segments to Float64 precision. 1022 distance tests (1545 total).",
       "priority": 2,
       "milestone": "P2",
       "blockedBy": ["VESSEL-1005"],

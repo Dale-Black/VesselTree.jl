@@ -142,3 +142,18 @@
   - Rejection sampling for sphere/ellipsoid sample_point is adequate for moderate aspect ratios
   - classify_order scans from highest order downward for correct boundary assignment
 - Next: VESSEL-1007 (AK-accelerated distance kernels) — P2 CCO Engine begins
+
+### 2026-03-05: VESSEL-1007 [PASS]
+- Attempted: Implement AK-accelerated point-to-segment distance kernels
+- Result: 1022 new tests pass (1545 total), all acceptance criteria met
+- Regression gate: 1545 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/distance.jl — point_segment_distance/sq (scalar), compute_all_distances! (AK.foreachindex), find_nearest_segments (AK.sortperm)
+  - test/test_distance.jl — 13 testsets with 1022 tests (1000 from AK vs scalar comparison on 1000 segments)
+  - src/VesselTree.jl — include + exports
+- Learning:
+  - AK.foreachindex with @view for active region works cleanly for distance computation
+  - AK.sortperm returns correct permutation for find_nearest_segments
+  - Zero-length segment handling: degenerate case returns distance to the single point
+  - All 6 geometric cases (on-segment, proximal, distal, perpendicular, behind, beyond) verified
+- Next: VESSEL-1008 (AK-accelerated intersection testing)

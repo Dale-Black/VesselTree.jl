@@ -73,3 +73,4 @@ end
 include("test_types.jl")
 include("test_parameters.jl")
 include("test_domain.jl")
+include("test_distance.jl")
