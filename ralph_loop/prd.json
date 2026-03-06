@@ -17,7 +17,8 @@
     "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 3 },
     "P6": { "name": "Validation", "stories": 2, "done": 2 },
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
-    "P8": { "name": "Export & Integration", "stories": 4, "done": 0 }
+    "P8": { "name": "Export & Integration", "stories": 4, "done": 0 },
+    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 1 }
   },
   "stories": [
 
@@ -563,6 +564,130 @@
         "Full test suite passes",
         "Validation report on 5000-terminal tree documented in progress.md",
         "Package loads cleanly with `using VesselTree`"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1028",
+      "title": "Spatial grid acceleration for CCO growth loop",
+      "type": "IMPL",
+      "status": "done",
+      "completedNote": "Integrated SpatialGrid into grow_tree! and generate_coronary_forest. Grid built at startup, rebuilt every 100 additions, incremental insertion between rebuilds. Brute-force for n<200 preserves exact results; grid-accelerated for larger trees. 237 new tests, 6394 total passing.",
+      "priority": 7,
+      "milestone": "P9",
+      "blockedBy": [],
+      "description": "Integrate SpatialGrid into grow_tree! and generate_coronary_forest for O(1) nearest-neighbor queries instead of brute-force O(n) compute_all_distances!.\n\nThe current growth loop calls compute_all_distances! (AK kernel over ALL n segments) for every candidate terminal. At n=10K this dominates runtime. SpatialGrid already exists in spatial.jl but isn't used.\n\nModify grow_tree!:\n1. Build SpatialGrid from existing segments (rebuild every ~100 additions)\n2. For each candidate terminal, query_nearby() to get candidate segments within adaptive radius\n3. Only run distance/intersection checks on nearby segments\n4. Fall back to full scan if grid returns too few candidates\n\nSame for generate_coronary_forest's inline growth loop.\n\nTarget: 10K terminals in < 30s (currently would take minutes).",
+      "acceptanceCriteria": [
+        "grow_tree! uses SpatialGrid for candidate search",
+        "10K terminal growth in SphereDomain completes in < 30s",
+        "All existing growth tests still pass with identical results for same RNG seed",
+        "Grid query returns same K-nearest as brute force (verified by comparison test)",
+        "At least 5 new tests for grid-accelerated growth"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1029",
+      "title": "Statistical subdivision engine (connectivity matrix)",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 7,
+      "milestone": "P9",
+      "blockedBy": [],
+      "description": "THE KEY TO SPEED: New function subdivide_terminals!(tree, params; rng) that takes a CCO tree with terminals at upper Strahler orders and recursively subdivides each terminal down to order 0 (8um capillaries) using Kassab's connectivity matrix.\n\nThis is the fast path to millions of segments. CCO grows ~1000 large-vessel terminals (orders 5-11) with proper spatial layout and intersection checking. Then subdivision fills in the microvasculature statistically — no intersection checking needed at capillary scale.\n\nAlgorithm for each terminal of order k:\n1. Look up connectivity matrix column k: CM[m+1, k+1] = avg number of order-m direct daughters\n2. For each daughter order m (from k-1 down to 0):\n   a. n_daughters = sample from Poisson(CM[m+1, k+1]), or round for determinism\n   b. For each daughter: sample diameter ~ N(mean_m, sd_m), length ~ N(mean_m, sd_m), clamp > 0\n   c. Compute radius from Murray's law: r_daughter from parent radius + asymmetry\n   d. Place spatially: parent distal point + direction * length, with angular offset from Barabasi rules\n   e. add_segment! to tree\n   f. Recursively subdivide this daughter at order m (if m > 0)\n3. Mark parent as bifurcation/trifurcation based on actual daughter count\n\nCRITICAL: Pre-estimate total segments from CM analysis and pre-allocate capacity. A single order-11 root produces ~6M segments. Use estimate_total_segments(order, CM) helper.\n\nMemory layout: all new segments go into the same SoA arrays. Pre-allocate for estimated total.\n\nPerformance: This is O(N) in total segments with no distance checking. Target: < 60s for 2M segments.",
+      "acceptanceCriteria": [
+        "subdivide_terminals! recursively generates daughters per Kassab CM",
+        "Diameters sampled from per-order Normal distributions",
+        "Lengths sampled from per-order Normal distributions",
+        "Murray's law holds at all new junctions (deviation < 1%)",
+        "Spatial placement follows parent direction + angular offset",
+        "Pre-allocation estimates within 2x of actual segment count",
+        "100 order-5 terminals produce 50K-500K total segments",
+        "< 60s for 2M total segments",
+        "At least 10 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1030",
+      "title": "Post-hoc Kassab radius refinement",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 7,
+      "milestone": "P9",
+      "blockedBy": ["VESSEL-1029"],
+      "description": "Fix the cascading radius collapse problem. Current approach applies Kassab asymmetry DURING growth, which causes sub-nanometer radii from cascading asymmetric splits.\n\nNew function apply_full_kassab_radii!(tree, params; rng):\n1. Top-down traversal (BFS from root)\n2. At each bifurcation/trifurcation: sample asymmetry from Beta(alpha, beta)\n3. Compute daughter radii via Murray's law: r_parent^gamma = r_large^gamma + r_small^gamma, r_small = asymmetry * r_large\n4. Assign larger radius to continuation (larger subtree), smaller to branch\n5. Enforce floor: min radius = vessel_cutoff_um / 2 / 1000 (= 0.004mm = 8um diameter)\n6. Final bottom-up Murray's law propagation to ensure global consistency\n\nThis replaces the during-growth kassab=true approach. The tree is grown with kassab=false (symmetric Murray's law, all terminals at 8um), then asymmetry is applied as a post-processing step.\n\nAlso fix recompute_radii_from_flow! Murray's law bug: ensure parent radius is always recomputed from children, never left stale.",
+      "acceptanceCriteria": [
+        "All terminal radii >= 0.004mm (8um diameter) after refinement",
+        "Asymmetry ratio distribution matches Beta(2.5, 0.8) via KS test (p > 0.05)",
+        "Murray's law deviation < 0.1% at all junctions after refinement",
+        "No sub-micrometer radii anywhere in tree",
+        "Works on trees with > 100K segments",
+        "At least 8 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1031",
+      "title": "Full pipeline: generate_kassab_coronary!",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 7,
+      "milestone": "P9",
+      "blockedBy": ["VESSEL-1028", "VESSEL-1029", "VESSEL-1030"],
+      "description": "Top-level function that produces a complete Kassab-scale coronary arterial forest.\n\nFunction: generate_kassab_coronary(domain, params; rng, verbose) -> CoronaryForest\n\nPipeline:\n1. CCO PHASE: For each artery (LAD, LCX, RCA), grow upper-order skeleton using grid-accelerated CCO. Target ~500-2000 terminals per artery at order 5+ (the 'handoff order'). Use territory partitioning for multi-tree growth. kassab=false (symmetric radii during growth).\n\n2. SUBDIVISION PHASE: For each tree, call subdivide_terminals! to recursively fill in orders 4 down to 0 per Kassab connectivity matrix. This multiplies ~1500 skeleton segments into ~2M+ total segments per artery.\n\n3. REFINEMENT PHASE: Apply post-hoc Kassab radii (asymmetry + Murray's law). Apply Barabasi junction geometry (sprouting/branching angles).\n\n4. VALIDATION: Run validate_tree on each artery, print summary.\n\nThe handoff order (default 5) is configurable — lower = more CCO (slower, more spatially accurate), higher = more subdivision (faster, more statistical).\n\nTarget outputs:\n- LAD: ~2M segments (order 11 root, 4500um diameter)\n- LCX: ~1.2M segments (order 10 root, 3330um diameter)  \n- RCA: ~1.5M segments (order 10-11 root)\n- Total: ~4-6M segments\n- Time: < 5 minutes\n- Memory: < 8GB",
+      "acceptanceCriteria": [
+        "Produces CoronaryForest with LAD + LCX + RCA",
+        "Total segments > 1M (ideally > 4M)",
+        "Min diameter = 8um, max diameter ~4500um",
+        "12 Strahler orders populated (0-11)",
+        "Completes in < 5 minutes on Apple Silicon",
+        "Peak memory < 8GB",
+        "Murray's law holds at all junctions",
+        "Validation report printed for each artery",
+        "At least 5 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1032",
+      "title": "Comprehensive Kassab validation + connectivity matrix audit",
+      "type": "VERIFY",
+      "status": "open",
+      "priority": 7,
+      "milestone": "P9",
+      "blockedBy": ["VESSEL-1031"],
+      "description": "Rigorous statistical validation against ALL Kassab 1993 data tables. Also audit and correct the connectivity matrix values.\n\nPart 1 — Connectivity Matrix Audit:\n- Current CM values in parameters.jl are labeled 'approximate'. Verify against Kassab 1993 Table 4 (or best available source).\n- Ensure column sums are consistent with expected daughter counts (~2 for bifurcation-dominant orders, ~2.5 for trifurcation-containing orders).\n- Add segment count targets per order from Kassab data.\n\nPart 2 — Per-Order Validation (for each of 12 orders):\n- Segment count: compare generated vs Kassab ratios\n- Diameter distribution: proper KS test (not z-test approximation) against N(mean, sd)\n- Length distribution: KS test against N(mean, sd)\n- L/D ratio: compare mean ± sd to Kassab values\n\nPart 3 — Global Validation:\n- Connectivity matrix: chi-squared test with proper normalization\n- Asymmetry distribution: KS test against Beta(2.5, 0.8)\n- Branching angles: compare mean/bimodality to Barabasi predictions\n- Murray's law compliance: max and mean deviation\n- Trifurcation percentage: compare to Barabasi ~5-8%\n\nPart 4 — Report Card:\n- Print pass/fail per metric with clear thresholds\n- Overall grade: fraction of metrics passing\n- Log to validation_results.md\n\nThreshold for 'passing': >= 8/12 orders pass diameter KS (p > 0.05), connectivity chi2 p > 0.01, asymmetry KS p > 0.05, Murray deviation < 1%.",
+      "acceptanceCriteria": [
+        "Connectivity matrix values verified or corrected against Kassab source",
+        "Per-order diameter KS tests implemented (proper, not z-test)",
+        "Per-order length KS tests implemented",
+        "Per-order segment count comparison implemented",
+        "Global connectivity chi-squared with proper DoF",
+        "Asymmetry distribution KS test",
+        "Report card with pass/fail per metric",
+        "At least 8/12 orders pass diameter KS on generated full-scale tree",
+        "Results documented in ralph_loop/progress.md",
+        "At least 10 new validation tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1033",
+      "title": "Performance profiling + optimization to < 5 min",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 7,
+      "milestone": "P9",
+      "blockedBy": ["VESSEL-1032"],
+      "description": "Profile the full generate_kassab_coronary pipeline and optimize to meet the < 5 minute target for a complete coronary forest (> 4M segments).\n\nKey optimization targets:\n1. Subdivision: Use AK.foreachindex for bulk segment coordinate computation when possible. Pre-compute direction vectors in batches.\n2. Capacity pre-allocation: Compute exact segment count estimate from CM before allocating. Avoid any array resizing.\n3. Murray's law propagation: On 4M+ segments, the generation-based sweep is O(n * max_gen). Consider order-based batching.\n4. Memory layout: Ensure SoA arrays are contiguous, cache-friendly access patterns.\n5. Barabasi geometry: Apply in bulk after full tree is built, not per-junction.\n\nProfile each phase separately:\n- CCO skeleton: should be < 30s for 2000 terminals with grid\n- Subdivision: should be < 120s for 4M segments\n- Radius refinement: should be < 30s\n- Geometry application: should be < 30s\n- Total: < 5 min with margin\n\nReport timing breakdown in progress.md.",
+      "acceptanceCriteria": [
+        "Full coronary forest (3 arteries, > 4M segments) in < 5 min",
+        "Timing breakdown logged per phase",
+        "Peak memory < 8GB",
+        "No unnecessary allocations in hot paths (verified by profiling)",
+        "AK used for all bulk array operations",
+        "All existing tests still pass"
       ]
     }
   ]

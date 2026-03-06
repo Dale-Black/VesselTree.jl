@@ -401,3 +401,19 @@
   - Root segment direction/length from TreeConfig; capacity estimated at 3x target_terminals
   - validate_forest runs validate_tree on each sub-tree
 - Next: VESSEL-1024 (JLD2 save/load + VTP export)
+
+### 2026-03-05: VESSEL-1028 [PASS]
+- Attempted: Integrate SpatialGrid into grow_tree! and generate_coronary_forest for grid-accelerated growth
+- Result: 237 new tests pass (6394 total), all acceptance criteria met
+- Regression gate: 6394 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/growth.jl — _domain_size, _grid_cell_size, _insert_segment_to_grid!, _find_nearest_via_grid, grow_tree! with grid
+  - src/forest.jl — generate_coronary_forest with per-tree spatial grids
+  - test/test_grid_growth.jl — 8 testsets with 237 tests (grid vs brute force, Murray's law, connectivity, kassab, forest)
+  - test/runtests.jl — include test_grid_growth.jl
+- Learning:
+  - Grid activation threshold (n >= 200) preserves exact brute-force results for small trees, matching existing tests with same RNG seed
+  - Grid rebuilt every 100 additions; incremental insert between rebuilds (stale entries are OK since distance is computed from current SoA arrays)
+  - search_radius = d_thresh * 5.0 provides good coverage; falls back to brute force if too few candidates
+  - _domain_size helper extracts domain sizing logic shared between grow_tree! and generate_coronary_forest
+- Next: VESSEL-1029 (Statistical subdivision engine)
