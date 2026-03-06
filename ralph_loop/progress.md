@@ -696,3 +696,14 @@
   - Diameter bounds start at 0.0 (not 5.0) per Jiang 1994
 - Bug found and fixed: Without max_order, root continuation terminal at order 11 got subdivided, producing 486K segments and overflowing capacity
 - Next: VESSEL-1036 (Implement diameter-defined Strahler ordering)
+
+### 2026-03-06: VESSEL-1036 [PASS]
+- Story: Implement diameter-defined Strahler ordering (Jiang 1994)
+- Result: DONE — 23,157 tests passing
+- Changes:
+  1. assign_strahler_orders_simple! alias for existing simple method
+  2. assign_diameter_defined_strahler! — new iterative Jiang 1994 method
+  3. _assign_topological_strahler! — internal topological ordering helper
+  4. New test file: test_strahler_jiang.jl (124 tests)
+- Converges in 3-5 iterations on CCO trees
+- Next: VESSEL-1037 (Implement element grouping)

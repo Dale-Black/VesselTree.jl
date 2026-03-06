@@ -19,7 +19,7 @@
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 4 },
     "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 6 },
-    "P10": { "name": "Exact Kassab Parity", "stories": 10, "done": 2 }
+    "P10": { "name": "Exact Kassab Parity", "stories": 10, "done": 3 }
   },
   "stories": [
 
@@ -744,7 +744,8 @@
       "id": "VESSEL-1036",
       "title": "Implement diameter-defined Strahler ordering (Jiang 1994)",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Added assign_diameter_defined_strahler! with iterative Jiang 1994 algorithm. Converges in 3-5 iterations. 23157 tests passing.",
       "priority": 9,
       "milestone": "P10",
       "blockedBy": ["VESSEL-1035"],

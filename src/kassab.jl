@@ -5,7 +5,7 @@
 
 Assign Strahler order to each segment based on its diameter using AK kernel.
 Diameter is converted from mm (internal) to um (Kassab scale) and classified
-using params.diameter_bounds.
+using params.diameter_bounds. This is the simple fixed-bound method.
 """
 function assign_strahler_orders!(tree::VascularTree, params::MorphometricParams)
     seg = tree.segments
@@ -32,6 +32,172 @@ function assign_strahler_orders!(tree::VascularTree, params::MorphometricParams)
         end
         order_view[i] = ord
     end
+    return nothing
+end
+
+"""Alias for assign_strahler_orders! — the simple fixed-bound method."""
+const assign_strahler_orders_simple! = assign_strahler_orders!
+
+"""
+    assign_diameter_defined_strahler!(tree, params; max_iter=20) -> Int
+
+Iterative diameter-defined Strahler ordering (Jiang et al. 1994, Eq 3A/3B).
+
+Algorithm:
+1. Initialize with topological Strahler ordering (bottom-up from terminals)
+2. Compute per-order mean diameter D_n and SD_n
+3. Compute non-overlapping diameter bounds from Eq 3A/3B
+4. Reassign each vessel to the order whose range contains its diameter
+5. Repeat until < 1% of vessels change order
+
+Returns number of iterations taken to converge.
+"""
+function assign_diameter_defined_strahler!(
+    tree::VascularTree,
+    params::MorphometricParams;
+    max_iter::Int=20,
+)
+    seg = tree.segments
+    topo = tree.topology
+    n = seg.n
+    n == 0 && return 0
+
+    # Step 1: Topological Strahler ordering (bottom-up)
+    _assign_topological_strahler!(tree)
+
+    # Get diameters in um (used throughout)
+    diameters = Vector{Float64}(undef, n)
+    for i in 1:n  # sequential: simple array fill
+        diameters[i] = seg.radius[i] * 2.0 * 1000.0
+    end
+
+    # Iterative refinement
+    for iter in 1:max_iter
+        # Step 2: Compute per-order statistics
+        max_order = 0
+        for i in 1:n
+            ord = Int(topo.strahler_order[i])
+            ord > max_order && (max_order = ord)
+        end
+        max_order < 1 && break
+
+        n_per_order = zeros(Int, max_order + 1)     # 0-indexed orders
+        sum_d = zeros(Float64, max_order + 1)
+        sum_d2 = zeros(Float64, max_order + 1)
+
+        for i in 1:n  # sequential: accumulate statistics
+            ord = Int(topo.strahler_order[i])
+            ord < 0 && continue
+            idx = ord + 1
+            idx > length(n_per_order) && continue
+            n_per_order[idx] += 1
+            sum_d[idx] += diameters[i]
+            sum_d2[idx] += diameters[i]^2
+        end
+
+        mean_d = zeros(Float64, max_order + 1)
+        sd_d = zeros(Float64, max_order + 1)
+        for k in 1:(max_order + 1)
+            if n_per_order[k] > 0
+                mean_d[k] = sum_d[k] / n_per_order[k]
+                if n_per_order[k] > 1
+                    var = (sum_d2[k] / n_per_order[k]) - mean_d[k]^2
+                    sd_d[k] = sqrt(max(var, 0.0))
+                end
+            end
+        end
+
+        # Step 3: Compute diameter bounds (Eq 3A/3B from Jiang 1994)
+        n_bounds = max_order + 2
+        bounds = Vector{Float64}(undef, n_bounds)
+        bounds[1] = 0.0       # D'1(0) = 0 (lowest order has no lower bound)
+
+        for k in 2:(max_order + 1)
+            # Lower bound of order k-1: D'1(k-1) = [(D_{k-2}+SD_{k-2}) + (D_{k-1}-SD_{k-1})] / 2
+            d_lo = mean_d[k - 1] + sd_d[k - 1]  # D_{k-2} + SD_{k-2} (prev order)
+            d_hi = mean_d[k] - sd_d[k]           # D_{k-1} - SD_{k-1} (current order)
+            bounds[k] = max((d_lo + d_hi) / 2.0, bounds[k - 1] + 0.001)  # enforce monotonicity
+        end
+        bounds[n_bounds] = Inf  # D'2(max_order) = Inf
+
+        # Step 4: Reassign orders by diameter range
+        n_changed = 0
+        for i in 1:n  # sequential: reassignment
+            d = diameters[i]
+            old_ord = Int(topo.strahler_order[i])
+            new_ord = Int32(-1)
+            for k in (max_order + 1):-1:1
+                if d >= bounds[k]
+                    new_ord = Int32(k - 1)
+                    break
+                end
+            end
+            if new_ord != old_ord
+                topo.strahler_order[i] = new_ord
+                n_changed += 1
+            end
+        end
+
+        # Step 5: Check convergence
+        frac_changed = n_changed / n
+        frac_changed < 0.01 && return iter
+    end
+
+    return max_iter
+end
+
+"""
+    _assign_topological_strahler!(tree)
+
+Assign topological Strahler orders bottom-up: terminals get order 1,
+at bifurcations parent = max(children) + (1 if equal).
+"""
+function _assign_topological_strahler!(tree::VascularTree)
+    topo = tree.topology
+    n = tree.segments.n
+    n == 0 && return nothing
+
+    # BFS order (top-down), then process bottom-up
+    order = _topo_order(tree)
+
+    # Initialize all to 0 (will be set bottom-up)
+    for i in 1:n  # sequential: initialization
+        topo.strahler_order[i] = Int32(0)
+    end
+
+    # Bottom-up pass
+    for k in length(order):-1:1
+        i = order[k]
+        c1 = Int(topo.child1_id[i])
+        c2 = Int(topo.child2_id[i])
+        c3 = Int(topo.child3_id[i])
+
+        if c1 <= 0
+            # Terminal → order 1
+            topo.strahler_order[i] = Int32(1)
+        elseif c3 > 0
+            # Trifurcation
+            o1 = Int(topo.strahler_order[c1])
+            o2 = Int(topo.strahler_order[c2])
+            o3 = Int(topo.strahler_order[c3])
+            m = max(o1, o2, o3)
+            n_max = (o1 == m ? 1 : 0) + (o2 == m ? 1 : 0) + (o3 == m ? 1 : 0)
+            topo.strahler_order[i] = Int32(n_max >= 2 ? m + 1 : m)
+        elseif c2 > 0
+            # Bifurcation
+            o1 = Int(topo.strahler_order[c1])
+            o2 = Int(topo.strahler_order[c2])
+            if o1 == o2
+                topo.strahler_order[i] = Int32(o1 + 1)
+            else
+                topo.strahler_order[i] = Int32(max(o1, o2))
+            end
+        else
+            # Single child — inherit order
+            topo.strahler_order[i] = topo.strahler_order[c1]
+        end
+    end
+
     return nothing
 end
 
