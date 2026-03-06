@@ -14,7 +14,7 @@
     "P2": { "name": "CCO Engine", "stories": 5, "done": 5 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 2 },
     "P4": { "name": "Kassab Constraints", "stories": 3, "done": 3 },
-    "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 0 },
+    "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 1 },
     "P6": { "name": "Validation", "stories": 2, "done": 0 },
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 0 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 0 }
@@ -362,7 +362,8 @@
       "id": "VESSEL-1017",
       "title": "Barabasi: Chi/rho parameters + junction geometry",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "compute_chi, compute_rho, classify_junction (sprouting/branching), compute_junction_angles (Murray-optimal), apply_junction_geometry! (rotate daughters). 145 new tests (4139 total).",
       "priority": 5,
       "milestone": "P5",
       "blockedBy": ["VESSEL-1003", "VESSEL-1010"],

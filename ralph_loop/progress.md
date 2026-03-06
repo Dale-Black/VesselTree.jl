@@ -287,3 +287,19 @@
   - Murray's law update_radii! at end ensures consistency regardless of initial assignment
   - Backward compatible: kassab=false (default) preserves old behavior
 - Next: VESSEL-1017 (Barabasi: Chi/rho parameters + junction geometry)
+
+### 2026-03-05: VESSEL-1017 [PASS]
+- Attempted: Implement Barabasi chi/rho parameters and junction geometry
+- Result: 145 new tests pass (4139 total), all acceptance criteria met
+- Regression gate: 4139 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/barabasi.jl — compute_chi, compute_rho, classify_junction, compute_junction_angles, apply_junction_geometry!, _find_perpendicular, _update_seg_length!
+  - test/test_barabasi.jl — 15 testsets with 145 tests
+  - src/VesselTree.jl — include + exports
+- Learning:
+  - Sprouting regime (rho < 0.83): large daughter continues straight, small at ~90 deg
+  - Branching regime (rho >= 0.83): linear interpolation from threshold to symmetric angle
+  - _find_perpendicular uses cross product with axis of smallest component
+  - apply_junction_geometry! preserves segment lengths while rotating endpoints
+  - compute_chi(1.0, π) fails because π is Irrational — must use Float64(π)
+- Next: VESSEL-1018 (Barabasi: Trifurcation detection + handling)

@@ -28,6 +28,7 @@ include("spatial.jl")
 include("growth.jl")
 include("hemodynamics.jl")
 include("kassab.jl")
+include("barabasi.jl")
 
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
@@ -47,5 +48,6 @@ export compute_resistances!, compute_flows!, compute_pressures!, validate_hemody
 export assign_terminal_flows!, recompute_radii_from_flow!
 export assign_strahler_orders!, sample_asymmetry, compute_daughter_radii, apply_kassab_radii!
 export build_empirical_connectivity, validate_connectivity, constrain_connectivity!
+export compute_chi, compute_rho, classify_junction, compute_junction_angles, apply_junction_geometry!
 
 end # module VesselTree
