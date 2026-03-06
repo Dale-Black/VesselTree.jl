@@ -67,4 +67,11 @@ export CoronaryForest, generate_coronary_forest, generate_kassab_coronary, valid
 export save_tree, load_tree, export_centerlines_vtp, export_forest_vtp
 export export_stl, export_graph_json, export_csv
 
+# Visualization stubs (implemented by VesselTreeMakieExt when CairoMakie is loaded)
+function plot_tree end
+function plot_tree_2d end
+function plot_validation_report end
+function plot_forest end
+export plot_tree, plot_tree_2d, plot_validation_report, plot_forest
+
 end # module VesselTree

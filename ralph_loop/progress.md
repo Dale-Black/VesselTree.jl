@@ -559,3 +559,26 @@
   - Binary STL format: 80-byte header + 4-byte uint32 triangle count + 50 bytes per triangle (normal + 3 vertices + 2-byte attribute)
   - Hand-rolled JSON avoids adding a dependency; works for simple nested Dict/Array structures
 - Next: VESSEL-1025 (Makie visualization) or VESSEL-1027 (End-to-end demo)
+
+### 2026-03-06: VESSEL-1025 [PASS]
+- Attempted: Implement CairoMakie visualization as a package extension
+- Result: 4 new tests pass (21200 total), all acceptance criteria met
+- Regression gate: 21200 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - ext/VesselTreeMakieExt.jl — plot_tree (3D), plot_tree_2d (2D projection), plot_validation_report (multi-panel), plot_forest (color by tree)
+  - src/VesselTree.jl — function stubs + exports for plot_tree, plot_tree_2d, plot_validation_report, plot_forest
+  - Project.toml — CairoMakie moved to [weakdeps], [extensions] section added
+  - test/test_visualization.jl — stub existence tests + conditional extension tests
+  - test/runtests.jl — include test_visualization.jl
+- Features:
+  - plot_tree: 3D line segments colored by :order/:radius/:flow/:generation, line width ∝ log(radius)
+  - plot_tree_2d: 2D projection (:xy/:xz/:yz) with DataAspect
+  - plot_validation_report: 4-panel figure (diameter histogram, asymmetry vs Beta PDF, branching angles, segments per order)
+  - plot_forest: 3D with per-tree coloring using wong_colors
+  - CairoMakie is a weak dependency — package loads without it, extension activates when CairoMakie is loaded
+- Learning:
+  - Package extension pattern: function stubs in main module, implementations in ext/. Extension loads when weakdep is available in user's environment
+  - Having same UUID in [deps] and [weakdeps] causes conflicts — [weakdeps] takes precedence, dep removed from Manifest
+  - For development testing, CairoMakie must be available in user's environment or a stacked environment
+  - Conditional testing with try/catch @eval using CairoMakie works for optional extension tests
+- Next: VESSEL-1027 (End-to-end demo + documentation)
