@@ -1,11 +1,17 @@
 # Statistical subdivision engine — Kassab connectivity matrix-based
 # Recursively subdivides CCO skeleton terminals into full microvasculature
+#
+# Uses bifurcation chains (not cascade stubs) to produce clean binary trees.
+# Each element's daughters are peeled off one at a time in a chain of bifurcations,
+# with continuation segments forming the parent element. This naturally produces
+# the S/E ratio (segments per element) observed in Kassab 1993.
 
 """
     estimate_total_segments(parent_order, params) -> Int
 
 Estimate total segments produced by recursively subdividing a parent of given
-Strahler order using the connectivity matrix. Uses expected values (no randomness).
+Strahler order using the connectivity matrix. Accounts for continuation segments
+in bifurcation chains. Uses expected values (no randomness).
 """
 function estimate_total_segments(parent_order::Int, params::MorphometricParams)
     parent_order <= 0 && return 1
@@ -15,7 +21,11 @@ function estimate_total_segments(parent_order::Int, params::MorphometricParams)
     for m in 0:(parent_order - 1)
         if m + 1 <= n_orders && parent_order + 1 <= n_orders
             avg = CM[m + 1, parent_order + 1]
-            avg > 0 && (total += avg * estimate_total_segments(m, params))
+            if avg > 0
+                # Each daughter creates 1 daughter segment + 1 continuation segment
+                # The daughter recursively expands; the continuation stays as-is
+                total += avg * (1.0 + estimate_total_segments(m, params))
+            end
         end
     end
     return ceil(Int, total)
@@ -42,21 +52,22 @@ function estimate_subdivision_capacity(tree::VascularTree, params::MorphometricP
 end
 
 """
-    _random_daughter_direction(parent_dir, is_first, d_order, parent_order, rng)
+    _random_daughter_direction(parent_dir, is_continuation, d_order, parent_order, rng)
 
 Compute a direction for a daughter segment based on parent direction.
-First daughter (continuation) gets small perturbation. Branches get larger offsets.
+Continuation segments get small perturbation. Branches get larger offsets
+based on Barabasi sprouting/branching regimes.
 """
 function _random_daughter_direction(
     parent_dir::NTuple{3,Float64},
-    is_first::Bool,
+    is_continuation::Bool,
     d_order::Int,
     parent_order::Int,
     rng::AbstractRNG,
 )
     dx, dy, dz = parent_dir
 
-    if is_first
+    if is_continuation
         # Continuation: small perturbation (< 15 degrees)
         max_angle = 0.26  # ~15 degrees
     else
@@ -101,17 +112,37 @@ function _random_daughter_direction(
 end
 
 """
-    subdivide_terminals!(tree, params; rng)
+    _sample_segment_length(order, params, rng) -> Float64
+
+Sample segment length (mm) from per-order distribution. Uses truncated Normal
+to avoid negative or unreasonably small lengths.
+"""
+function _sample_segment_length(order::Int, params::MorphometricParams, rng::AbstractRNG)
+    idx = order + 1
+    if idx < 1 || idx > length(params.length_mean)
+        return params.vessel_cutoff_um / 1000.0
+    end
+    mean_um = params.length_mean[idx]
+    sd_um = params.length_sd[idx]
+    min_um = max(params.vessel_cutoff_um, mean_um * 0.1)  # at least 10% of mean
+    # Truncated Normal: sample until we get a valid value (simple rejection)
+    for _ in 1:10
+        l = mean_um + randn(rng) * sd_um
+        l >= min_um && return l / 1000.0  # um → mm
+    end
+    return mean_um / 1000.0  # fallback to mean
+end
+
+"""
+    subdivide_terminals!(tree, params; rng, max_order)
 
 Recursively subdivide each terminal of order > 0 down to order 0 (capillaries)
-using Kassab's connectivity matrix. This is the statistical fast-path for
-generating millions of microvasculature segments without intersection checking.
+using Kassab's connectivity matrix. Uses bifurcation chains: each daughter
+peeled off creates a proper bifurcation with a continuation segment, producing
+trees with 100% bifurcations (no cascade stubs).
 
-Algorithm per terminal of order k:
-1. Look up CM column k for expected daughter counts per order
-2. Sample actual counts from Poisson(CM[m+1, k+1])
-3. Create daughter segments with sampled diameter/length
-4. Recursively subdivide each daughter of order > 0
+Asymmetry is baked in: at each bifurcation, Murray's law with sampled asymmetry
+determines daughter radii. No post-hoc radius assignment needed.
 """
 function subdivide_terminals!(
     tree::VascularTree,
@@ -146,6 +177,12 @@ end
     _subdivide_recursive!(tree, parent_idx, parent_order, params, rng)
 
 Recursively subdivide a single segment into daughters per Kassab CM.
+Uses a bifurcation chain: each daughter peels off via a proper bifurcation
+with a continuation segment that maintains the parent's order.
+
+For N daughters, creates N bifurcations (each with daughter + continuation).
+The continuation segments form the parent element (S/E = N+1).
+Only the daughter segments are recursively subdivided.
 """
 function _subdivide_recursive!(
     tree::VascularTree,
@@ -171,7 +208,7 @@ function _subdivide_recursive!(
     else
         dir_x, dir_y, dir_z = 1.0, 0.0, 0.0
     end
-    parent_dir = (dir_x, dir_y, dir_z)
+    current_dir = (dir_x, dir_y, dir_z)
 
     # Build daughter list from CM column
     daughters = Int[]  # list of daughter orders
@@ -187,106 +224,54 @@ function _subdivide_recursive!(
     end
 
     isempty(daughters) && return
-    sort!(daughters, rev=true)  # highest order first (continuation)
+    # Sort daughters by order ascending — peel off smallest first (most asymmetric)
+    sort!(daughters)
 
-    # Add daughters with cascading if > available child slots
-    daughter_queue = copy(daughters)
+    # Build bifurcation chain: each daughter gets its own bifurcation point
     current_parent = parent_idx
-    daughter_idx = 0  # tracks position for is_first logic
 
-    while !isempty(daughter_queue)
-        topo = tree.topology
-        # Count existing children on current_parent
-        n_existing = 0
-        topo.child1_id[current_parent] > 0 && (n_existing += 1)
-        topo.child2_id[current_parent] > 0 && (n_existing += 1)
-        topo.child3_id[current_parent] > 0 && (n_existing += 1)
-        available = 3 - n_existing
+    for i in eachindex(daughters)
+        d_order = daughters[i]
+        r_parent = seg.radius[current_parent]
 
-        available <= 0 && break  # shouldn't happen if cascading works
+        # Sample asymmetry and compute radii via Murray's law
+        # No floor clamp: Murray's law holds exactly at every junction.
+        # Sub-capillary radii are fine — order-0 terminals won't be further subdivided.
+        asymmetry = sample_asymmetry(params, rng)
+        r_large, r_small = compute_daughter_radii(r_parent, asymmetry, gamma)
 
-        if length(daughter_queue) <= available
-            # All remaining fit directly
-            for d_order in daughter_queue
-                daughter_idx += 1
-                _add_subdivision_daughter!(tree, current_parent, d_order, parent_dir, daughter_idx == 1, parent_order, params, rng)
-            end
-            break
+        # Daughter (branch) gets the small radius; continuation gets the large radius
+        d_radius = r_small
+        c_radius = r_large
+
+        # Bifurcation point: distal end of current parent
+        bp_x = seg.distal_x[current_parent]
+        bp_y = seg.distal_y[current_parent]
+        bp_z = seg.distal_z[current_parent]
+        bp = (bp_x, bp_y, bp_z)
+
+        # Create daughter segment (branch)
+        d_length = _sample_segment_length(d_order, params, rng)
+        d_dir = _random_daughter_direction(current_dir, false, d_order, parent_order, rng)
+        d_distal = (bp_x + d_dir[1] * d_length, bp_y + d_dir[2] * d_length, bp_z + d_dir[3] * d_length)
+        d_id = add_segment!(tree, bp, d_distal, d_radius, Int32(current_parent))
+
+        # Create continuation segment (same order as parent element)
+        c_length = _sample_segment_length(parent_order, params, rng)
+        c_dir = _random_daughter_direction(current_dir, true, parent_order, parent_order, rng)
+        c_distal = (bp_x + c_dir[1] * c_length, bp_y + c_dir[2] * c_length, bp_z + c_dir[3] * c_length)
+        c_id = add_segment!(tree, bp, c_distal, c_radius, Int32(current_parent))
+
+        # Recursively subdivide the daughter
+        if d_order > 0
+            _subdivide_recursive!(tree, Int(d_id), d_order, params, rng)
         end
 
-        # Need cascading: add (available - 1) daughters + 1 stub
-        n_to_add = max(available - 1, 0)
-        for _ in 1:n_to_add
-            d_order = popfirst!(daughter_queue)
-            daughter_idx += 1
-            _add_subdivision_daughter!(tree, current_parent, d_order, parent_dir, daughter_idx == 1, parent_order, params, rng)
-        end
-
-        # Create cascade stub in last slot
-        stub_len = params.vessel_cutoff_um / 1000.0 * 0.01
-        cp_x = seg.distal_x[current_parent]
-        cp_y = seg.distal_y[current_parent]
-        cp_z = seg.distal_z[current_parent]
-        stub_distal = (
-            cp_x + parent_dir[1] * stub_len,
-            cp_y + parent_dir[2] * stub_len,
-            cp_z + parent_dir[3] * stub_len,
-        )
-        stub_radius = seg.radius[current_parent]
-        stub_id = add_segment!(tree, (cp_x, cp_y, cp_z), stub_distal, stub_radius, Int32(current_parent))
-        current_parent = Int(stub_id)
+        # Move to continuation for next bifurcation in the chain
+        current_parent = Int(c_id)
+        current_dir = c_dir
     end
-end
 
-"""
-    _add_subdivision_daughter!(tree, parent_idx, d_order, parent_dir, is_first, parent_order, params, rng)
-
-Add a single subdivision daughter segment and recursively subdivide it.
-"""
-function _add_subdivision_daughter!(
-    tree::VascularTree,
-    parent_idx::Int,
-    d_order::Int,
-    parent_dir::NTuple{3,Float64},
-    is_first::Bool,
-    parent_order::Int,
-    params::MorphometricParams,
-    rng::AbstractRNG,
-)
-    seg = tree.segments
-
-    # Sample daughter diameter and length from per-order distributions
-    d_diam_um = max(
-        params.diameter_mean[d_order + 1] + randn(rng) * params.diameter_sd[d_order + 1],
-        params.vessel_cutoff_um,
-    )
-    d_length_um = max(
-        params.length_mean[d_order + 1] + randn(rng) * params.length_sd[d_order + 1],
-        params.vessel_cutoff_um,
-    )
-
-    d_radius = d_diam_um / 2.0 / 1000.0  # um → mm
-    d_length = d_length_um / 1000.0        # um → mm
-
-    # Compute direction
-    d_dir = _random_daughter_direction(parent_dir, is_first, d_order, parent_order, rng)
-
-    # Compute endpoints
-    cp_x = seg.distal_x[parent_idx]
-    cp_y = seg.distal_y[parent_idx]
-    cp_z = seg.distal_z[parent_idx]
-
-    proximal = (cp_x, cp_y, cp_z)
-    distal = (
-        cp_x + d_dir[1] * d_length,
-        cp_y + d_dir[2] * d_length,
-        cp_z + d_dir[3] * d_length,
-    )
-
-    new_id = add_segment!(tree, proximal, distal, d_radius, Int32(parent_idx))
-
-    # Recursively subdivide if order > 0
-    if d_order > 0
-        _subdivide_recursive!(tree, Int(new_id), d_order, params, rng)
-    end
+    # current_parent is the terminal end of the element — NOT further subdivided
+    # (all daughters for this element have been accounted for by the CM entry)
 end
