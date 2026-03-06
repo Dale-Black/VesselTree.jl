@@ -369,3 +369,19 @@
   - Murray deviation at all junctions after update_radii! is < 1e-6 as expected
   - Extra metrics stored in Dict{Symbol, Any} for extensibility
 - Next: VESSEL-1022 (Territory partitioning + collision avoidance)
+
+### 2026-03-05: VESSEL-1022 [PASS]
+- Attempted: Implement territory partitioning, collision avoidance, coronary configs
+- Result: 24 new tests pass (4532 total), all acceptance criteria met
+- Regression gate: 4532 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/forest.jl — TreeConfig, TerritoryMap, initialize_territories, query_territory, sample_in_territory, check_inter_tree_collision, coronary_tree_configs
+  - test/test_forest.jl — 9 testsets with 24 tests
+  - src/VesselTree.jl — include + exports
+  - test/runtests.jl — include test_forest.jl
+- Learning:
+  - Territory map uses ~20 cells per dimension for coarse Voronoi-like partition
+  - Nearest-root assignment gives reasonable territory shapes
+  - check_inter_tree_collision uses AK.minimum on distance buffer
+  - coronary_tree_configs: LAD 40%, LCX 25%, RCA 35% with approximate ostia positions
+- Next: VESSEL-1023 (Multi-tree forest growth)
