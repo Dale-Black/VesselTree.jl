@@ -11,7 +11,7 @@
   "milestones": {
     "P0": { "name": "Discovery", "stories": 4, "done": 4 },
     "P1": { "name": "Foundation", "stories": 3, "done": 3 },
-    "P2": { "name": "CCO Engine", "stories": 5, "done": 3 },
+    "P2": { "name": "CCO Engine", "stories": 5, "done": 4 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
     "P4": { "name": "Kassab Constraints", "stories": 3, "done": 0 },
     "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 0 },
@@ -224,7 +224,8 @@
       "id": "VESSEL-1010",
       "title": "Core CCO growth loop + Murray's law propagation",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Full CCO growth loop: sample_terminal_candidate (rejection sampling with AK distance check), evaluate_all_connections! (parallel Kamiya), check_intersections! (parallel), add_bifurcation! (segment splitting), update_radii! (Murray's law bottom-up). grow_tree! grows 50+ terminals in sphere/box domains. Murray's law verified at every bifurcation. 45 growth tests (2832 total).",
       "priority": 2,
       "milestone": "P2",
       "blockedBy": ["VESSEL-1006", "VESSEL-1007", "VESSEL-1008", "VESSEL-1009"],

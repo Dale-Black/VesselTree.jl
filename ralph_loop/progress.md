@@ -184,3 +184,19 @@
   - Golden section search converges in ~20 iterations to high precision
   - Murray's law: r_parent^gamma = r_left^gamma + r_right^gamma verified for both symmetric and asymmetric splits
 - Next: VESSEL-1010 (Core CCO growth loop + Murray's law propagation)
+
+### 2026-03-05: VESSEL-1010 [PASS]
+- Attempted: Implement core CCO growth loop with Murray's law radius propagation
+- Result: 45 new tests pass (2832 total), all acceptance criteria met
+- Regression gate: 2832 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/murray.jl — update_radii! (bottom-up Murray's law propagation by generation)
+  - src/growth.jl — grow_tree!, add_bifurcation!, sample_terminal_candidate
+  - test/test_growth.jl — 9 testsets with 45 tests
+- Learning:
+  - add_bifurcation! must transfer original children to continuation segment when splitting
+  - Adaptive distance threshold d_thresh = domain_size / (10 * (n+1)^(1/3)) works for space-filling
+  - Intersection check with min_dist = d_thresh * 0.1 prevents self-intersection
+  - Murray's law holds exactly at every bifurcation after update_radii! (verified)
+  - Growth rate depends on domain size vs intersection threshold balance
+- Next: VESSEL-1011 (Spatial indexing for fast segment queries)
