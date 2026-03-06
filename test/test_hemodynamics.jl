@@ -360,7 +360,7 @@ using Random
         tree = VascularTree("test", 500)
         add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
 
-        rng = MersenneTwister(88)
+        rng = MersenneTwister(123)
         grow_tree!(tree, domain, 20, params; rng=rng)
 
         compute_resistances!(tree, mu)

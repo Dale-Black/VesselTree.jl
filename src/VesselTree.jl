@@ -30,6 +30,7 @@ include("spatial.jl")
 include("growth.jl")
 include("hemodynamics.jl")
 include("kassab.jl")
+include("elements.jl")
 include("barabasi.jl")
 include("validation.jl")
 include("subdivision.jl")
@@ -54,6 +55,8 @@ export compute_resistances!, compute_flows!, compute_pressures!, validate_hemody
 export assign_terminal_flows!, recompute_radii_from_flow!
 export assign_strahler_orders!, assign_strahler_orders_simple!, assign_diameter_defined_strahler!
 export sample_asymmetry, compute_daughter_radii, apply_kassab_radii!, apply_full_kassab_radii!
+export ElementData, group_into_elements, build_element_connectivity
+export compute_element_statistics, compute_se_ratios
 export build_empirical_connectivity, validate_connectivity, constrain_connectivity!
 export compute_chi, compute_rho, classify_junction, compute_junction_angles, apply_junction_geometry!
 export compute_trifurcation_angles, check_trifurcation_merge, merge_to_trifurcation!, apply_trifurcation_geometry!
