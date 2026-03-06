@@ -18,8 +18,13 @@ const ASYMMETRY_ALPHA = 2.5          # Beta distribution parameter
 const ASYMMETRY_BETA = 0.8           # Beta distribution parameter
 
 include("types.jl")
+include("parameters.jl")
+include("domain.jl")
 
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
+export MorphometricParams, kassab_coronary_params, classify_order
+export AbstractDomain, SphereDomain, BoxDomain, EllipsoidDomain
+export in_domain, sample_point, signed_distance
 
 end # module VesselTree

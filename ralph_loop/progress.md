@@ -125,3 +125,20 @@
   - Capacity-based pre-allocation works cleanly: error on overflow, views for active region
   - junction_type as Symbol (:none, :bifurcation, :trifurcation) keeps topology CPU-side
 - Next: VESSEL-1006 (Morphometric parameters + domain types)
+
+### 2026-03-05: VESSEL-1006 [PASS]
+- Attempted: Implement morphometric parameter structs and perfusion domain types
+- Result: 425 new tests pass (523 total), all acceptance criteria met, P1 milestone complete
+- Regression gate: 523 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/parameters.jl — MorphometricParams struct, kassab_coronary_params(), classify_order()
+  - src/domain.jl — AbstractDomain, SphereDomain, BoxDomain, EllipsoidDomain with in_domain/sample_point/signed_distance
+  - test/test_parameters.jl — 94 tests covering tables, connectivity matrix, thresholds, classify_order
+  - test/test_domain.jl — 331 tests (3 domain types × boundary/inside/outside/sampling)
+  - src/VesselTree.jl — includes + exports for parameters and domain modules
+- Learning:
+  - Connectivity matrix is 12x12 (daughter_order+1 × parent_order+1), column sums ~2-3
+  - EllipsoidDomain signed_distance is approximate (exact requires iterative Newton solve)
+  - Rejection sampling for sphere/ellipsoid sample_point is adequate for moderate aspect ratios
+  - classify_order scans from highest order downward for correct boundary assignment
+- Next: VESSEL-1007 (AK-accelerated distance kernels) — P2 CCO Engine begins
