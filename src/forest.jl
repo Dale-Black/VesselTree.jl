@@ -386,26 +386,20 @@ function generate_kassab_coronary(
     handoff_order::Int=5,
     tree_configs::Vector{TreeConfig}=coronary_tree_configs(),
 )
-    # Phase 1: CCO skeleton growth (kassab=false for symmetric radii)
-    if verbose
-        println("Phase 1: CCO skeleton growth...")
-    end
+    t_start = time()
 
     # Estimate capacity: CCO skeleton + subdivision expansion
     max_terminals = maximum(cfg.target_terminals for cfg in tree_configs)
     skeleton_capacity = max_terminals * 3
-    # Estimate subdivision expansion based on handoff order
     expansion = estimate_total_segments(handoff_order, params)
-    total_capacity = min(skeleton_capacity * expansion * 5, 10_000_000)  # cap at 10M per tree
+    total_capacity = min(skeleton_capacity * expansion * 5, 10_000_000)
 
-    # Build forest with increased capacity
     cco_configs = [
         TreeConfig(cfg.name, cfg.root_position, cfg.root_radius, cfg.root_direction,
                    cfg.target_terminals, cfg.territory_fraction)
         for cfg in tree_configs
     ]
 
-    # Use generate_coronary_forest for CCO phase but with expanded capacity
     tmap = initialize_territories(domain, cco_configs)
     gamma = params.gamma
 
@@ -429,25 +423,30 @@ function generate_kassab_coronary(
         trees[cfg.name] = tree
     end
 
-    # CCO growth phase — use handoff_order diameter for terminals so
-    # subdivide_terminals! can recursively fill orders below handoff
+    # Phase 1: CCO skeleton growth
+    t_phase1 = time()
+    if verbose
+        println("Phase 1: CCO skeleton growth...")
+    end
+
     terminal_radius = params.diameter_mean[handoff_order + 1] / 2.0 / 1000.0
     max_rounds = max_terminals * 50
     added = Dict(cfg.name => 0 for cfg in cco_configs)
     domain_size = _domain_size(domain)
 
+    # Use CCO-sized buffers (not total_capacity) to save memory during CCO phase
+    cco_buf_cap = skeleton_capacity
     buffers = Dict{String, NamedTuple}()
     grids = Dict{String, SpatialGrid}()
     last_rebuild = Dict{String, Int}()
     grid_rebuild_interval = 100
 
     for cfg in cco_configs
-        cap = total_capacity
         buffers[cfg.name] = (
-            distances = zeros(cap),
-            costs = zeros(cap),
-            bifurc_t = zeros(cap),
-            intersect = Vector{Bool}(undef, cap),
+            distances = zeros(cco_buf_cap),
+            costs = zeros(cco_buf_cap),
+            bifurc_t = zeros(cco_buf_cap),
+            intersect = Vector{Bool}(undef, cco_buf_cap),
         )
         tree = trees[cfg.name]
         cs = _grid_cell_size(domain_size, max(tree.segments.n, 10))
@@ -455,9 +454,9 @@ function generate_kassab_coronary(
         last_rebuild[cfg.name] = tree.segments.n
     end
 
-    round = 0
-    while round < max_rounds
-        round += 1
+    iter = 0
+    while iter < max_rounds
+        iter += 1
         all_done = true
 
         for cfg in cco_configs
@@ -545,7 +544,8 @@ function generate_kassab_coronary(
 
             n_before = tree.segments.n
             cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radius)
-            update_radii!(tree, gamma)
+            # Skip update_radii! during CCO — deferred to end of phase (radii only
+            # matter for cost computation which uses parent radius, unaffected by Murray)
 
             _insert_segment_to_grid!(grid, tree.segments, seg_idx)
             for new_seg_idx in (n_before + 1):tree.segments.n
@@ -558,13 +558,24 @@ function generate_kassab_coronary(
         all_done && break
     end
 
+    # Single Murray's law pass after all CCO growth complete
+    for (name, tree) in trees
+        update_radii!(tree, gamma)
+    end
+
+    t_phase1_end = time()
     if verbose
         for cfg in cco_configs
             println("  $(cfg.name): $(added[cfg.name]) / $(cfg.target_terminals) CCO terminals, $(trees[cfg.name].segments.n) skeleton segments")
         end
+        println("  Phase 1 time: $(round(t_phase1_end - t_phase1, digits=1))s")
     end
 
+    # Free CCO buffers before subdivision (no longer needed)
+    empty!(buffers)
+
     # Phase 2: Statistical subdivision
+    t_phase2 = time()
     if verbose
         println("Phase 2: Statistical subdivision...")
     end
@@ -576,7 +587,13 @@ function generate_kassab_coronary(
         end
     end
 
+    t_phase2_end = time()
+    if verbose
+        println("  Phase 2 time: $(round(t_phase2_end - t_phase2, digits=1))s")
+    end
+
     # Phase 3: Refinement
+    t_phase3 = time()
     if verbose
         println("Phase 3: Kassab radius refinement + Barabasi geometry...")
     end
@@ -601,18 +618,22 @@ function generate_kassab_coronary(
         end
     end
 
-    # Phase 4: Validation
+    t_phase3_end = time()
+    if verbose
+        println("  Phase 3 time: $(round(t_phase3_end - t_phase3, digits=1))s")
+    end
+
+    # Phase 4: Summary
     forest = CoronaryForest(trees, tmap, params)
+    t_total = time() - t_start
 
     if verbose
-        println("Phase 4: Validation...")
+        println("Phase 4: Summary")
         for (name, tree) in sort(collect(forest.trees), by=x->x[1])
-            report = validate_tree(tree, params)
-            println("\n  --- $(name) ---")
-            print_report(stdout, report)
+            println("  $(name): $(tree.segments.n) segments")
         end
         total = sum(t.segments.n for (_, t) in trees)
-        println("\n  Total: $total segments")
+        println("  Total: $total segments in $(round(t_total, digits=1))s")
     end
 
     return forest

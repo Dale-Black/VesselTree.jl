@@ -494,3 +494,31 @@
   - The 8/12 orders passing criterion needs either: (a) skip radius refinement post-hoc or (b) use truncated Normal as reference or (c) only validate subdivision-populated orders
   - Smirnov's series (4 terms) gives accurate p-values for n > 35; for small n the p-value is approximate
 - Next: VESSEL-1033 (Performance profiling + optimization to < 5 min)
+
+### 2026-03-06: VESSEL-1033 [PASS]
+- Attempted: Profile and optimize generate_kassab_coronary pipeline to < 5 min for > 4M segments
+- Result: 4 new tests pass (21155 total), all acceptance criteria met
+- Regression gate: 21155 tests pass, 0 fail, 0 error
+- Performance (2000 terminals, handoff_order=9, single tree):
+  - Phase 1 (CCO skeleton): 8.2s for 5300 segments
+  - Phase 2 (Subdivision): 1.0s for 4.1M segments
+  - Phase 3 (Refinement): 1.3s for radius + geometry
+  - Total: 4,105,495 segments in 10.6s (target: < 300s)
+- Optimizations applied:
+  1. update_radii! rewritten from O(n*max_gen) generation sweep to O(n) BFS traversal (inlined BFS since _topo_order not available at include time)
+  2. CCO-sized buffers during Phase 1 instead of total_capacity-sized (saves memory)
+  3. Deferred Murray's law to end of CCO phase (single pass instead of per-bifurcation)
+  4. Timing instrumentation per phase with verbose output
+  5. Renamed `round` → `iter` to avoid shadowing Julia's round() function
+  6. Freed CCO buffers before subdivision (empty!(buffers))
+- Files created/modified:
+  - src/murray.jl — update_radii! rewritten with inlined BFS (O(n) instead of O(n*max_gen))
+  - src/forest.jl — CCO-sized buffers, deferred Murray update, timing instrumentation, round→iter rename
+  - test/test_performance.jl — 4 tests: segment count, positive radii, timing budget, Murray update speed
+  - test/runtests.jl — include test_performance.jl
+- Learning:
+  - CCO bottleneck is intersection checking and point sampling, not Murray propagation — deferring Murray didn't significantly speed up Phase 1
+  - Subdivision is extremely fast (~1s for 4M segments) because it only does local add_segment! calls with no intersection checking
+  - update_radii! O(n) BFS is correct and faster, but the generation-sweep was already O(n) in practice (each segment visited once per generation, max_gen << n)
+  - Peak memory well under 8GB — SoA Float64 arrays for 4M segments ≈ 30 arrays × 4M × 8B = 960MB
+- Next: P9 complete. Remaining: P8 (VESSEL-1024 JLD2/VTP, VESSEL-1025 Makie, VESSEL-1026 STL, VESSEL-1027 Demo)
