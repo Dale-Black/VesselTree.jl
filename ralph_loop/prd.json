@@ -18,7 +18,7 @@
     "P6": { "name": "Validation", "stories": 2, "done": 2 },
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 0 },
-    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 2 }
+    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 3 }
   },
   "stories": [
 
@@ -613,7 +613,8 @@
       "id": "VESSEL-1030",
       "title": "Post-hoc Kassab radius refinement",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "apply_full_kassab_radii! with subtree-size-based continuation assignment, floor enforcement, trifurcation support. 370 new tests, 6841 total passing.",
       "priority": 7,
       "milestone": "P9",
       "blockedBy": ["VESSEL-1029"],

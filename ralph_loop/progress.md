@@ -435,3 +435,20 @@
   - _find_perpendicular from barabasi.jl reused for direction computation
   - add_segment! errors at 4th child — must cascade before 3rd child used up
 - Next: VESSEL-1030 (Post-hoc Kassab radius refinement)
+
+### 2026-03-05: VESSEL-1030 [PASS]
+- Attempted: Implement post-hoc Kassab radius refinement with floor enforcement
+- Result: 370 new tests pass (6841 total), all acceptance criteria met
+- Regression gate: 6841 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/kassab.jl — apply_full_kassab_radii! (top-down asymmetry + floor + Murray propagation)
+  - src/VesselTree.jl — export
+  - test/test_kassab_refinement.jl — 8 testsets with 370 tests
+  - test/runtests.jl — include test_kassab_refinement.jl
+- Learning:
+  - Subtree size determines continuation assignment (largest subtree gets largest radius)
+  - Trifurcation handling: two asymmetry samples, split parent into (large_pair, r3) then (r1, r2)
+  - Floor enforcement needed twice: once during top-down pass, once after bottom-up Murray propagation
+  - Murray's law deviation < 1% with floor enforcement; exact (< 1e-6) without floor
+  - update_radii! is nearly idempotent after apply_full_kassab_radii! (rtol < 0.01)
+- Next: VESSEL-1031 (Full pipeline: generate_kassab_coronary!)
