@@ -162,11 +162,20 @@ end
     CoronaryForest
 
 Holds multiple vascular trees with territory partitioning.
+`tree_params` maps tree name → MorphometricParams for per-artery validation.
+`params` is the default/primary params (backward compatible).
 """
 struct CoronaryForest
     trees::Dict{String, VascularTree}
     territory_map::TerritoryMap
     params::MorphometricParams
+    tree_params::Dict{String, MorphometricParams}
+end
+
+# Backward-compatible constructor (no tree_params)
+function CoronaryForest(trees, tmap, params::MorphometricParams)
+    tp = Dict{String, MorphometricParams}(name => params for name in keys(trees))
+    return CoronaryForest(trees, tmap, params, tp)
 end
 
 """
@@ -368,15 +377,34 @@ function generate_coronary_forest(
 end
 
 """
+    _params_for_tree(name, default_params) -> MorphometricParams
+
+Auto-select per-artery Kassab params based on tree name.
+Falls back to `default_params` for unrecognized names.
+"""
+function _params_for_tree(name::String, default_params::MorphometricParams)
+    upper = uppercase(name)
+    if contains(upper, "RCA")
+        return kassab_rca_params()
+    elseif contains(upper, "LAD")
+        return kassab_lad_params()
+    elseif contains(upper, "LCX")
+        return kassab_lcx_params()
+    else
+        return default_params
+    end
+end
+
+"""
     generate_kassab_coronary(domain, params; rng, verbose, handoff_order, tree_configs) -> CoronaryForest
 
-Full pipeline: CCO skeleton + statistical subdivision + Kassab radius refinement.
+Full pipeline: CCO skeleton + statistical subdivision + Barabasi geometry.
 
 1. **CCO phase**: Grid-accelerated multi-tree growth with territory partitioning.
-   kassab=false (symmetric radii during growth).
-2. **Subdivision phase**: subdivide_terminals! per tree using Kassab CM.
-3. **Refinement phase**: apply_full_kassab_radii! + Barabasi junction geometry.
-4. **Validation**: validate_tree per tree (printed if verbose).
+2. **Subdivision phase**: subdivide_terminals! per tree using per-artery Kassab CM.
+   Radii and asymmetry are baked into subdivision (CM-implied asymmetry).
+3. **Refinement phase**: Barabasi junction geometry only (no post-hoc radius assignment).
+4. **Summary**: per-tree segment counts.
 """
 function generate_kassab_coronary(
     domain::AbstractDomain,
@@ -387,6 +415,12 @@ function generate_kassab_coronary(
     tree_configs::Vector{TreeConfig}=coronary_tree_configs(),
 )
     t_start = time()
+
+    # Build per-artery params map
+    per_artery = Dict{String, MorphometricParams}()
+    for cfg in tree_configs
+        per_artery[cfg.name] = _params_for_tree(cfg.name, params)
+    end
 
     # Estimate capacity: CCO skeleton + subdivision expansion
     max_terminals = maximum(cfg.target_terminals for cfg in tree_configs)
@@ -429,7 +463,13 @@ function generate_kassab_coronary(
         println("Phase 1: CCO skeleton growth...")
     end
 
-    terminal_radius = params.diameter_mean[handoff_order + 1] / 2.0 / 1000.0
+    # Per-artery terminal radius at handoff order
+    terminal_radii = Dict{String, Float64}()
+    for cfg in cco_configs
+        tp = per_artery[cfg.name]
+        ho = min(handoff_order, tp.n_orders - 1)
+        terminal_radii[cfg.name] = tp.diameter_mean[ho + 1] / 2.0 / 1000.0
+    end
     max_rounds = max_terminals * 50
     added = Dict(cfg.name => 0 for cfg in cco_configs)
     domain_size = _domain_size(domain)
@@ -543,7 +583,7 @@ function generate_kassab_coronary(
             !found && continue
 
             n_before = tree.segments.n
-            cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radius)
+            cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radii[cfg.name])
             # Skip update_radii! during CCO — deferred to end of phase (radii only
             # matter for cost computation which uses parent radius, unaffected by Murray)
 
@@ -581,7 +621,9 @@ function generate_kassab_coronary(
     end
 
     for (name, tree) in trees
-        subdivide_terminals!(tree, params; rng=rng, max_order=handoff_order)
+        tp = per_artery[name]
+        ho = min(handoff_order, tp.n_orders - 1)
+        subdivide_terminals!(tree, tp; rng=rng, max_order=ho)
         if verbose
             println("  $(name): $(tree.segments.n) segments after subdivision")
         end
@@ -592,14 +634,14 @@ function generate_kassab_coronary(
         println("  Phase 2 time: $(round(t_phase2_end - t_phase2, digits=1))s")
     end
 
-    # Phase 3: Refinement
+    # Phase 3: Barabasi junction geometry (radii already baked into subdivision)
     t_phase3 = time()
     if verbose
         println("Phase 3: Kassab radius refinement + Barabasi geometry...")
     end
 
     for (name, tree) in trees
-        apply_full_kassab_radii!(tree, params; rng=rng)
+        tp = per_artery[name]
 
         # Apply Barabasi junction geometry in topological (top-down) order
         # sequential: tree traversal for correct parent-before-child ordering
@@ -607,9 +649,9 @@ function generate_kassab_coronary(
         for k in 1:length(topo_ord)
             i = topo_ord[k]
             if tree.topology.junction_type[i] == :bifurcation
-                apply_junction_geometry!(tree, Int32(i), params)
+                apply_junction_geometry!(tree, Int32(i), tp)
             elseif tree.topology.junction_type[i] == :trifurcation
-                apply_trifurcation_geometry!(tree, Int32(i), params)
+                apply_trifurcation_geometry!(tree, Int32(i), tp)
             end
         end
 
@@ -624,7 +666,7 @@ function generate_kassab_coronary(
     end
 
     # Phase 4: Summary
-    forest = CoronaryForest(trees, tmap, params)
+    forest = CoronaryForest(trees, tmap, params, per_artery)
     t_total = time() - t_start
 
     if verbose
@@ -640,11 +682,13 @@ function generate_kassab_coronary(
 end
 
 """
+    validate_forest(forest) -> Dict{Symbol, Any}
     validate_forest(forest, params) -> Dict{Symbol, Any}
 
-Validate a multi-tree forest. Returns a dict with per-tree and inter-tree metrics.
+Validate a multi-tree forest using per-tree params from the forest.
+Returns a dict with per-tree and inter-tree metrics.
 """
-function validate_forest(forest::CoronaryForest, params::MorphometricParams)
+function validate_forest(forest::CoronaryForest)
     report = Dict{Symbol, Any}()
 
     total_segments = 0
@@ -652,7 +696,8 @@ function validate_forest(forest::CoronaryForest, params::MorphometricParams)
 
     for (name, tree) in forest.trees
         total_segments += tree.segments.n
-        tree_reports[name] = validate_tree(tree, params)
+        tp = get(forest.tree_params, name, forest.params)
+        tree_reports[name] = validate_tree(tree, tp)
     end
 
     report[:total_segments] = total_segments
@@ -661,3 +706,6 @@ function validate_forest(forest::CoronaryForest, params::MorphometricParams)
 
     return report
 end
+
+# Backward-compatible overload
+validate_forest(forest::CoronaryForest, params::MorphometricParams) = validate_forest(forest)

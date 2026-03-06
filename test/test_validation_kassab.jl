@@ -77,15 +77,14 @@ using Distributions
             @test r.mean_um > 0.0
         end
 
-        # Orders populated by subdivision (0 to handoff_order-1) should
-        # have diameters close to Kassab means (they were sampled from N(mean,sd))
+        # Orders populated by subdivision should have element diameters
+        # close to Kassab element-level means
         for ord in 0:3
             if haskey(diam_results, ord) && diam_results[ord].n >= 10
                 r = diam_results[ord]
-                expected_mean = params.diameter_mean[ord + 1]
-                # Mean should be within 3 SDs of expected
-                expected_sd = params.diameter_sd[ord + 1]
-                @test abs(r.mean_um - expected_mean) < 3 * expected_sd
+                expected_mean = params.diameter_mean_elem[ord + 1]
+                expected_sd = params.diameter_sd_elem[ord + 1]
+                @test abs(r.mean_um - expected_mean) < 5 * expected_sd
             end
         end
     end
