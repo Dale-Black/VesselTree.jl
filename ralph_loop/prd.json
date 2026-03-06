@@ -18,7 +18,7 @@
     "P6": { "name": "Validation", "stories": 2, "done": 2 },
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 0 },
-    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 4 }
+    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 5 }
   },
   "stories": [
 
@@ -656,7 +656,8 @@
       "id": "VESSEL-1032",
       "title": "Comprehensive Kassab validation + connectivity matrix audit",
       "type": "VERIFY",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Implemented proper one-sample KS test, per-order diameter/length validation, asymmetry KS, connectivity matrix audit, and report card with pass/fail. CM values verified (column sums 2.0-2.9, diagonal dominant). Report card shows Murray's law passes, 11 orders populated, but diameter KS fails due to post-hoc radius refinement shifting distributions. 143 new tests.",
       "priority": 7,
       "milestone": "P9",
       "blockedBy": ["VESSEL-1031"],

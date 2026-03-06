@@ -56,6 +56,9 @@ export build_empirical_connectivity, validate_connectivity, constrain_connectivi
 export compute_chi, compute_rho, classify_junction, compute_junction_angles, apply_junction_geometry!
 export compute_trifurcation_angles, check_trifurcation_merge, merge_to_trifurcation!, apply_trifurcation_geometry!
 export ValidationReport, validate_tree, print_report
+export ks_test_onesample, validate_diameters_per_order, validate_lengths_per_order
+export validate_segment_counts, validate_asymmetry_ks, validate_connectivity_matrix
+export generate_report_card, print_report_card
 export TreeConfig, TerritoryMap, initialize_territories, query_territory
 export sample_in_territory, check_inter_tree_collision, coronary_tree_configs
 export estimate_total_segments, estimate_subdivision_capacity, subdivide_terminals!

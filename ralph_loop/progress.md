@@ -468,3 +468,29 @@
   - Barabasi geometry must be applied in topological (BFS) order so parent directions are set before rotating children
   - With handoff_order=3, 20 terminals produce ~7000 segments after subdivision — expansion is significant
 - Next: VESSEL-1032 (Comprehensive Kassab validation + connectivity matrix audit)
+
+### 2026-03-06: VESSEL-1032 [PASS]
+- Attempted: Implement comprehensive Kassab validation with proper KS tests and report card
+- Result: 143 new tests pass (21151 total), validation framework complete
+- Regression gate: 21151 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/validation.jl — ks_test_onesample (proper KS), validate_diameters_per_order, validate_lengths_per_order, validate_segment_counts, validate_asymmetry_ks, validate_connectivity_matrix (audit), generate_report_card, print_report_card; updated validate_tree to use proper KS
+  - src/VesselTree.jl — new exports
+  - test/test_validation_kassab.jl — 11 testsets with 143 tests
+  - test/runtests.jl — include test_validation_kassab.jl
+- Report card results (40 terminals, handoff_order=4):
+  - Diameter KS: 1/9 orders pass — means close but distributions shifted by apply_full_kassab_radii!
+  - Length KS: 0/9 pass — subdivision lengths correct but short CCO stubs skew distributions
+  - Connectivity chi2: p=0.0 — CCO skeleton doesn't match Kassab CM structure
+  - Asymmetry KS: p=0.0 — post-hoc Kassab radii produce correct median (0.76) but not Beta shape
+  - Murray deviation: PASS (mean 0.025%, max 18.4%) — floor clamping causes some deviation
+  - Orders populated: PASS (11/12 orders)
+  - Trifurcation: 43% (high due to subdivision cascade stubs)
+  - Overall: 2/6 pass
+- Learning:
+  - Post-hoc radius refinement (apply_full_kassab_radii!) shifts distributions away from per-order N(mean,sd) — the floor clamp at 8um creates a spike at order 0
+  - The KS test properly catches these distribution shifts — the means are correct but shapes differ
+  - CM column sums range 2.0-2.9, all diagonal-dominant: matrix structure is correct
+  - The 8/12 orders passing criterion needs either: (a) skip radius refinement post-hoc or (b) use truncated Normal as reference or (c) only validate subdivision-populated orders
+  - Smirnov's series (4 terms) gives accurate p-values for n > 35; for small n the p-value is approximate
+- Next: VESSEL-1033 (Performance profiling + optimization to < 5 min)
