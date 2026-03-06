@@ -1,0 +1,551 @@
+{
+  "project": "VesselTree.jl — Physiologically Accurate Vascular Tree Generator",
+  "version": "1.0.0",
+  "updated": "2026-03-05",
+  "goal": "Generate vascular trees from large arteries (3-5mm) to capillaries (8um) using CCO + Kassab morphometry + Barabasi surface optimization. ALL computational kernels use AcceleratedKernels.jl for native CPU/GPU performance. General-purpose (coronary, cerebral, pulmonary) with coronary as initial target.",
+  "architecture": {
+    "compute": "AcceleratedKernels.jl for ALL parallel kernels. No plain for-loops on segment arrays.",
+    "data_layout": "Structure-of-Arrays (SoA) for geometry. Topology in plain Vectors on CPU.",
+    "science": "CCO growth + Kassab morphometry (gamma=7/3, asymmetry Beta(2.5,0.8)) + Barabasi surface optimization (chi/rho thresholds at 0.83)"
+  },
+  "milestones": {
+    "P0": { "name": "Discovery", "stories": 4, "done": 0 },
+    "P1": { "name": "Foundation", "stories": 3, "done": 0 },
+    "P2": { "name": "CCO Engine", "stories": 5, "done": 0 },
+    "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
+    "P4": { "name": "Kassab Constraints", "stories": 3, "done": 0 },
+    "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 0 },
+    "P6": { "name": "Validation", "stories": 2, "done": 0 },
+    "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 0 },
+    "P8": { "name": "Export & Integration", "stories": 4, "done": 0 }
+  },
+  "stories": [
+
+    {
+      "id": "VESSEL-1000",
+      "title": "DISCOVERY: AcceleratedKernels.jl API for tree algorithms",
+      "type": "DISCOVERY",
+      "status": "open",
+      "priority": 0,
+      "milestone": "P0",
+      "blockedBy": [],
+      "description": "Deep-dive into AcceleratedKernels.jl to understand how to use it for the specific computational patterns in vascular tree generation.\n\nResearch:\n1. AK.foreachindex — element-wise parallel operations on arrays\n2. AK.reduce, AK.mapreduce — parallel reductions (min, sum, argmin)\n3. AK.accumulate — prefix sums (useful for level-wise processing?)\n4. AK.sort, AK.sortperm — parallel sorting (spatial bucketing?)\n5. Backend support — what works on CPU, CUDA, Metal, oneAPI?\n6. How to handle growing arrays (tree adds segments over time) — pre-allocate with capacity?\n7. SoA vs AoS — what layout works best with AK kernels?\n8. Can AK kernels close over external arrays (capture in closure)?\n9. Error handling inside AK kernels (what happens on NaN, out-of-bounds?)\n10. Performance: overhead of AK.foreachindex for small arrays (<100 elements)?\n\nOutput: `ralph_loop/research/ak-api.md`\n\nDo NOT write any VesselTree.jl source code.",
+      "acceptanceCriteria": [
+        "Research document covers all 10 questions above",
+        "Working code snippets tested locally for each AK pattern",
+        "Recommendation for SoA layout that works with AK",
+        "Recommendation for growing-array strategy (pre-allocate + n counter)",
+        "No source code written in src/ or test/"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1001",
+      "title": "DISCOVERY: OpenCCO algorithm deep-dive",
+      "type": "DISCOVERY",
+      "status": "open",
+      "priority": 0,
+      "milestone": "P0",
+      "blockedBy": [],
+      "description": "Study the OpenCCO C++ codebase (https://github.com/OpenCCO-team/OpenCCO) to understand the CCO algorithm in detail.\n\nKey files to read:\n- CoronaryArteryTree.cpp/h — Tree data structure and main growth logic\n- GeomHelpers.cpp/h — Kamiya optimization (bifurcation point finding)\n- ExpandTreeHelpers.cpp/h — Growth loop, candidate sampling, connection selection\n- DomainController.cpp/h — Perfusion domain boundary handling\n\nQuestions to answer:\n1. How does the main growth loop work step-by-step?\n2. How does Kamiya optimization find the optimal bifurcation point?\n3. How are candidate terminal points sampled and filtered?\n4. How are segment intersections detected?\n5. How does the cost function work (volume minimization)?\n6. How does radius propagation work after adding a bifurcation?\n7. How is the tree stored in memory? (Arrays? Linked list?)\n8. How is the domain boundary handled (rejection sampling? SDF?)\n9. What are the key performance bottlenecks and how are they addressed?\n10. How many terminals can OpenCCO handle? What's the scaling?\n\nAlso read the IPOL paper (doi:10.5201/ipol.2023.477) for the mathematical details.\n\nOutput: `ralph_loop/research/opencco-algorithm.md`",
+      "acceptanceCriteria": [
+        "Step-by-step algorithm documented with pseudocode",
+        "Kamiya optimization explained with math",
+        "Data structure design documented",
+        "Performance characteristics noted",
+        "Key differences from our approach identified (we use surface cost, not volume)"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1002",
+      "title": "DISCOVERY: Kassab 1993 morphometry data extraction",
+      "type": "DISCOVERY",
+      "status": "open",
+      "priority": 0,
+      "milestone": "P0",
+      "blockedBy": [],
+      "description": "Extract and document ALL quantitative data from Kassab et al. 1993 (Am J Physiol Heart 265:H350-H365) and related Kassab/Huo papers.\n\nData to extract:\n1. Table 1: Diameter by Strahler order (mean, SD, N for each order 0-11)\n2. Table 2: Segment length by order (mean, SD, N)\n3. Table 3: Connectivity matrix (probability of order m parent having order n daughter)\n4. Asymmetry ratio distribution (Ds/Dl statistics)\n5. Branching angle measurements (mean, SD by order)\n6. Total segment counts by order\n7. Length/Diameter ratios by order\n8. Element vs segment distinction (Kassab's terminology)\n9. Diameter-defined Strahler ordering rules (threshold boundaries)\n10. From Huo-Kassab 2007: derivation summary of gamma = 7/3\n\nAlso check: Are the Kassab tables available digitized anywhere? If not, transcribe from the paper.\n\nOutput: `ralph_loop/research/kassab-morphometry.md` with complete tables.\n\nThis data becomes the GROUND TRUTH for validation.",
+      "acceptanceCriteria": [
+        "Complete diameter table (orders 0-11) with mean, SD, N",
+        "Complete length table with mean, SD, N",
+        "Connectivity matrix transcribed",
+        "Asymmetry ratio distribution parameters documented",
+        "Diameter boundary thresholds for order classification",
+        "Total segment counts (approximately 2 million per major artery)",
+        "gamma = 7/3 derivation summarized from Huo-Kassab 2007"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1003",
+      "title": "DISCOVERY: Barabasi 2026 surface optimization for blood vessels",
+      "type": "DISCOVERY",
+      "status": "open",
+      "priority": 0,
+      "milestone": "P0",
+      "blockedBy": [],
+      "description": "Study Barabasi et al. 2026 (Nature 649:315-322) and the min-surf-netw code (https://github.com/Barabasi-Lab/min-surf-netw).\n\nKey concepts to understand and document:\n1. Surface minimization vs length/volume minimization — why surface?\n2. The chi parameter (chi = w/r): physical meaning, how to compute\n3. Trifurcation stability: when chi > 0.83, k=4 nodes are stable\n4. The rho parameter (rho = D_small/D_large): sprouting vs branching\n5. Sprouting regime (rho < rho_th): perpendicular branch emergence\n6. Branching regime (rho >= rho_th): both daughters deflect\n7. rho_th for blood vessels specifically (0.83 from paper)\n8. The P(lambda) distribution: what it means, expected shape for blood vessels\n9. Junction surface computation: pants decomposition, minimal surfaces\n10. How does this modify Murray's law? Connection to gamma != 3.0\n11. Data from physical.network — what blood vessel data is available?\n\nStudy the Python code in min-surf-netw for implementation details:\n- How is the surface cost computed numerically?\n- How are junction geometries optimized?\n- What simplifications can we use for tube-like vessels?\n\nOutput: `ralph_loop/research/barabasi-surface.md`",
+      "acceptanceCriteria": [
+        "Chi parameter explained with formula and physical meaning",
+        "Rho parameter and sprouting/branching transition documented",
+        "Trifurcation stability criterion documented",
+        "Junction surface cost computation approach identified",
+        "Blood vessel-specific parameter values extracted",
+        "P(lambda) distribution shape for blood vessels documented",
+        "Implementation strategy recommended for our use case"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1004",
+      "title": "Project setup: Package skeleton with AK.jl",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 1,
+      "milestone": "P1",
+      "blockedBy": ["VESSEL-1000"],
+      "description": "Create the VesselTree.jl package skeleton with AcceleratedKernels.jl as a core dependency.\n\nCreate:\n- Project.toml with all dependencies (AcceleratedKernels, StaticArrays, Distributions, LinearAlgebra, Random, NearestNeighbors, WriteVTK, JLD2, JSON3, GeometryBasics)\n- src/VesselTree.jl — main module that imports AK and exports public API\n- test/runtests.jl — test runner with at least: module loads, AK available\n- test/Project.toml — test dependencies (Test, HypothesisTests)\n- CLAUDE.md — project-specific context for Claude Code\n\nVerify:\n- `julia --project=. -e 'using Pkg; Pkg.instantiate()'` works\n- `julia --project=. -e 'using VesselTree'` loads successfully\n- `julia --project=. -e 'import AcceleratedKernels as AK; println(\"AK OK\")'` works\n- `julia --project=. test/runtests.jl` passes\n\nThe module should export nothing yet — just prove the skeleton works.",
+      "acceptanceCriteria": [
+        "Project.toml exists with AcceleratedKernels as dependency",
+        "`using VesselTree` loads without error",
+        "AcceleratedKernels is importable from the project",
+        "Test suite runs and passes (at least 5 basic tests)",
+        "CLAUDE.md created with project context"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1005",
+      "title": "Core types: SoA segment storage + tree topology",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 1,
+      "milestone": "P1",
+      "blockedBy": ["VESSEL-1000", "VESSEL-1004"],
+      "description": "Implement the core data structures using SoA layout for AK compatibility.\n\nCreate src/types.jl with:\n\n1. SegmentData{V} — SoA storage for segment geometry\n   - proximal_x/y/z, distal_x/y/z (V <: AbstractVector — works with CuArray etc)\n   - radius, seg_length (V)\n   - flow, pressure_proximal, pressure_distal, resistance (V)\n   - n::Int (active count), capacity::Int\n\n2. TreeTopology — CPU-only topology data\n   - parent_id::Vector{Int32} (-1 for root)\n   - child1_id::Vector{Int32} (-1 for leaf)\n   - child2_id::Vector{Int32} (-1 for leaf)\n   - child3_id::Vector{Int32} (-1 for non-trifurcation)\n   - strahler_order::Vector{Int32}\n   - generation::Vector{Int32}\n   - is_terminal::Vector{Bool}\n   - junction_type::Vector{Symbol} (:none, :bifurcation, :trifurcation)\n\n3. VascularTree — composite\n   - name::String\n   - segments::SegmentData{V}\n   - topology::TreeTopology\n   - root_segment_id::Int32\n   - n_terminals::Int, n_bifurcations::Int, n_trifurcations::Int\n\n4. Constructor functions:\n   - SegmentData(capacity::Int) — pre-allocate with given capacity\n   - add_segment!(tree, proximal, distal, radius, parent_id) -> segment_id\n   - get_children(topology, segment_id) -> Vector{Int32}\n\nCreate test/test_types.jl with thorough tests:\n   - Construction with various capacities\n   - Adding segments and verifying SoA arrays update correctly\n   - Topology parent/child relationships\n   - Edge cases: empty tree, single segment, capacity growth",
+      "acceptanceCriteria": [
+        "SegmentData uses SoA layout with parameterized vector type V",
+        "TreeTopology stores parent/child/order data in plain Vectors",
+        "VascularTree composes SegmentData + TreeTopology",
+        "add_segment! correctly updates both SoA geometry and topology",
+        "Pre-allocation with capacity works (n < capacity)",
+        "At least 20 tests in test_types.jl, all passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1006",
+      "title": "Morphometric parameters + domain types",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 1,
+      "milestone": "P1",
+      "blockedBy": ["VESSEL-1002", "VESSEL-1003", "VESSEL-1004"],
+      "description": "Implement parameter structs and perfusion domain abstraction.\n\nCreate src/parameters.jl:\n- MorphometricParams struct with ALL Kassab + Barabasi values\n- kassab_coronary_params() — preset for coronary vasculature\n- Fields: gamma (7/3), diameter_by_order, length_by_order, diameter_bounds, connectivity_matrix, asymmetry_distribution (Beta(2.5,0.8)), trifurcation_threshold (0.83), sprouting_threshold (0.83), blood_viscosity, root_pressure, terminal_pressure, min_segment_length, angle_mean, angle_std\n- build_connectivity_matrix() — from Kassab 1993 data\n\nCreate src/domain.jl:\n- AbstractDomain interface: in_domain(domain, point), sample_point(domain, rng)\n- EllipsoidDomain — parameterized ellipsoid (good for LV myocardium)\n- SphereDomain — simple sphere (for testing)\n- BoxDomain — axis-aligned box (for testing)\n- signed_distance(domain, point) — SDF for boundary testing\n\nCreate tests for both.",
+      "acceptanceCriteria": [
+        "MorphometricParams struct holds all required fields",
+        "kassab_coronary_params() returns correct values (gamma=7/3, all Kassab tables)",
+        "Connectivity matrix is valid (rows sum to ~1.0)",
+        "At least 3 domain types implemented with in_domain + sample_point",
+        "signed_distance works for boundary proximity testing",
+        "At least 20 tests passing for parameters + domains"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1007",
+      "title": "AK-accelerated distance kernels",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 2,
+      "milestone": "P2",
+      "blockedBy": ["VESSEL-1005"],
+      "description": "Implement point-to-segment distance computation using AK.foreachindex.\n\nThis is THE hot path — called for every candidate terminal against every existing segment.\n\nCreate src/distance.jl:\n\n1. point_segment_distance_scalar(cx, cy, cz, px, py, pz, dx, dy, dz) -> Float64\n   Pure scalar function computing minimum distance from point (c) to line segment (p->d).\n   This is the kernel that runs inside AK.foreachindex.\n\n2. compute_all_distances!(distances, segments::SegmentData, cx, cy, cz)\n   AK.foreachindex over all segments, computing distance from candidate to each segment.\n   distances[i] = point_segment_distance_scalar(cx, cy, cz, segments.proximal_x[i], ...)\n\n3. find_nearest_segments(distances, k) -> indices\n   Return indices of k nearest segments (for candidate connection search).\n   Use AK.sortperm or partial sort.\n\nCreate test/test_distance.jl:\n- Test scalar distance function against known geometry (point on line, point off line, point at endpoint)\n- Test AK kernel against brute-force loop on 1000+ segments\n- Test with collinear points, zero-length segments, very far points\n- Verify find_nearest returns correct k segments",
+      "acceptanceCriteria": [
+        "Scalar distance function is correct for all geometric cases",
+        "AK kernel produces same results as scalar loop to within Float64 precision",
+        "find_nearest_segments returns correct indices",
+        "Works on arrays of 1000+ segments",
+        "No plain for-loops in distance.jl (AK only)",
+        "At least 15 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1008",
+      "title": "AK-accelerated intersection testing",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 2,
+      "milestone": "P2",
+      "blockedBy": ["VESSEL-1005"],
+      "description": "Implement segment-segment intersection testing using AK.foreachindex.\n\nWhen adding a new segment, we must verify it doesn't cross any existing segment.\n\nCreate src/intersection.jl:\n\n1. segments_intersect_scalar(a1x,a1y,a1z, a2x,a2y,a2z, b1x,b1y,b1z, b2x,b2y,b2z, min_dist) -> Bool\n   Returns true if the minimum distance between two 3D line segments is less than min_dist.\n   Uses the standard closest-point-on-two-lines algorithm.\n\n2. check_intersections!(results, segments::SegmentData, new_px,new_py,new_pz, new_dx,new_dy,new_dz, min_dist)\n   AK.foreachindex kernel: results[i] = true if segment i intersects the new segment.\n\n3. has_any_intersection(results) -> Bool\n   Quick check using AK.reduce(|, results) or AK.any.\n\n4. check_domain_crossing(domain, p1, p2) -> Bool\n   Check if a segment from p1 to p2 leaves the domain (sample points along segment).\n\nCreate test/test_intersection.jl:\n- Known intersecting segments (crossing X pattern)\n- Known non-intersecting segments (parallel, skew)\n- Edge cases: shared endpoint, collinear, zero-length\n- AK kernel vs scalar loop verification on 1000+ segments\n- Domain crossing detection",
+      "acceptanceCriteria": [
+        "Scalar intersection test handles all geometric edge cases",
+        "AK kernel correctly flags all intersecting segments",
+        "has_any_intersection uses AK reduction, not loop",
+        "Domain crossing detection works with EllipsoidDomain",
+        "No plain for-loops in intersection.jl",
+        "At least 15 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1009",
+      "title": "Kamiya bifurcation point optimization",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 2,
+      "milestone": "P2",
+      "blockedBy": ["VESSEL-1001", "VESSEL-1007"],
+      "description": "Implement the Kamiya optimization: given a parent segment A->B and a new terminal point T, find the optimal bifurcation point P along AB that minimizes surface cost.\n\nCreate src/kamiya.jl:\n\n1. surface_cost_at_t(t, segment_data, seg_idx, terminal_x/y/z, params) -> Float64\n   Compute surface cost for bifurcation at parametric position t in [0,1] along segment.\n   Surface cost = 2*pi*r1*L1 + 2*pi*r2*L2 + 2*pi*r3*L3 + junction_surface_estimate\n   where r1,r2,r3 are estimated via Murray's law.\n\n2. optimize_bifurcation_point(segment_data, seg_idx, terminal_x/y/z, params) -> (t_opt, cost)\n   Golden section search along segment to minimize surface cost.\n   Returns optimal parametric position and cost.\n\n3. evaluate_all_connections!(costs, bifurc_t, segments, n_active, tx, ty, tz, params)\n   AK.foreachindex kernel: for each segment, run Kamiya optimization and store cost + bifurcation position.\n   This is the main connection-finding kernel.\n\n4. select_best_connection(costs, bifurc_t, n_active) -> (segment_idx, t_opt, cost)\n   Find the connection with minimum cost.\n\nNote: The golden section search per segment runs INSIDE the AK kernel (each thread optimizes one segment independently).\n\nCreate test/test_kamiya.jl with geometric test cases.",
+      "acceptanceCriteria": [
+        "Golden section search converges to correct bifurcation point on known geometry",
+        "Surface cost function correctly combines cylinder surfaces + junction estimate",
+        "AK kernel evaluates all connections in parallel",
+        "Optimal connection matches brute-force search",
+        "No plain for-loops in kamiya.jl",
+        "At least 15 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1010",
+      "title": "Core CCO growth loop + Murray's law propagation",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 2,
+      "milestone": "P2",
+      "blockedBy": ["VESSEL-1006", "VESSEL-1007", "VESSEL-1008", "VESSEL-1009"],
+      "description": "Implement the main CCO growth algorithm that adds terminal segments to the tree.\n\nCreate src/growth.jl:\n\n1. grow_tree!(tree, domain, n_terminals, params; rng=Random.default_rng()) -> VascularTree\n   Main loop (SEQUENTIAL — inherently serial, one terminal at a time):\n   For each new terminal:\n   a. Sample candidate point in domain (rejection sampling)\n   b. Find optimal connection using AK-parallel Kamiya evaluation\n   c. Check intersection constraints using AK-parallel intersection test\n   d. If valid: add bifurcation (split parent segment, create two daughters)\n   e. Update radii via Murray's law\n   f. Log progress every 100 terminals\n\n2. add_bifurcation!(tree, parent_seg_idx, bifurc_t, terminal_point) -> (new_seg1_id, new_seg2_id)\n   Split parent segment at bifurcation point. Create two new daughter segments.\n   Update topology (parent/child relationships).\n\n3. sample_terminal_candidate(domain, tree, params, rng) -> (x, y, z) or nothing\n   Rejection sampling: random point in domain, reject if too close to existing segments.\n   Uses AK distance kernel for proximity check.\n\nCreate src/murray.jl:\n\n1. update_radii!(tree, params)\n   Propagate radii from terminals to root using Murray's law: r_parent^gamma = sum(r_child^gamma)\n   Process in reverse topological order (terminals first, root last).\n   The per-level updates use AK.foreachindex; the level traversal is sequential.\n\n2. compute_terminal_radius(flow, terminal_pressure, length, viscosity) -> Float64\n   Determine terminal segment radius from hemodynamic constraints.\n\nCreate test/test_growth.jl:\n- Grow a small tree (100 terminals) in a SphereDomain\n- Verify tree connectivity (every segment has valid parent except root)\n- Verify Murray's law holds at every bifurcation\n- Verify no segment intersections\n- Verify all terminals are in domain\n- Verify segment count == 2*n_terminals - 1 (binary tree property)",
+      "acceptanceCriteria": [
+        "grow_tree! produces a valid tree with n_terminals leaves",
+        "Murray's law r^gamma = r1^gamma + r2^gamma holds at every bifurcation (rtol=1e-10)",
+        "No segment intersections in the generated tree",
+        "All segment endpoints are within the domain",
+        "Segment count = 2*n_terminals - 1",
+        "AK kernels used for distance, intersection, and connection finding",
+        "Can grow 500+ terminal tree without error",
+        "At least 20 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1011",
+      "title": "Spatial indexing for fast segment queries",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 2,
+      "milestone": "P2",
+      "blockedBy": ["VESSEL-1005", "VESSEL-1007"],
+      "description": "The naive O(n) scan of all segments for distance/intersection becomes the bottleneck as the tree grows. Implement spatial indexing to reduce the candidate set.\n\nCreate src/spatial.jl:\n\n1. SpatialGrid — 3D uniform grid that buckets segment midpoints\n   - build_grid(segments, domain, cell_size) -> SpatialGrid\n   - query_nearby(grid, point, search_radius) -> Vector{Int32} (segment indices)\n   - insert!(grid, segment_idx, midpoint)\n\n2. The growth loop should:\n   a. First query the spatial grid for nearby segments (cheap)\n   b. Then run AK distance/intersection kernels only on the nearby subset\n   c. This reduces from O(n) to O(k) where k << n\n\n3. Update grow_tree! to use spatial indexing when n_segments > threshold (e.g., 500).\n\nCreate test/test_spatial.jl:\n- Build grid, insert segments, verify query returns correct neighbors\n- Verify no false negatives (nearest segment is always in query result)\n- Performance: query should be faster than full scan for n > 1000",
+      "acceptanceCriteria": [
+        "SpatialGrid correctly indexes segment midpoints",
+        "query_nearby returns all segments within search_radius",
+        "No false negatives (nearest segment always included)",
+        "grow_tree! uses spatial grid when n > threshold",
+        "At least 10 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1012",
+      "title": "Hemodynamics: Poiseuille resistance + pressure/flow",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 3,
+      "milestone": "P3",
+      "blockedBy": ["VESSEL-1010"],
+      "description": "Implement hemodynamic computations using AK kernels.\n\nCreate src/hemodynamics.jl:\n\n1. compute_resistances!(segments, viscosity)\n   AK kernel: R[i] = 8 * mu * L[i] / (pi * r[i]^4)\n\n2. compute_flows!(tree, params)\n   Assign flows from terminals to root.\n   Terminal flow = total_flow / n_terminals (equal distribution initially).\n   At bifurcations: Q_parent = Q_child1 + Q_child2.\n   Sequential tree walk (root to terminal), but per-level flow assignment uses AK.\n\n3. compute_pressures!(tree, params)\n   From root pressure, compute pressure drop along each segment:\n   P_distal = P_proximal - Q * R\n   Sequential tree walk from root to terminals.\n\n4. validate_hemodynamics(tree, params) -> Bool\n   Check: all pressures in [0, root_pressure], all flows > 0, terminal pressures near target.\n\nCreate test/test_hemodynamics.jl:\n- Single straight tube: verify Poiseuille formula\n- Simple bifurcation: verify flow conservation\n- Small tree: verify pressures decrease from root to terminals\n- Validate hemodynamics passes on a CCO-generated tree",
+      "acceptanceCriteria": [
+        "Poiseuille resistance computed via AK kernel",
+        "Flow conservation holds at every bifurcation",
+        "Pressure monotonically decreases root-to-terminal",
+        "Terminal pressures are near params.terminal_pressure",
+        "validate_hemodynamics returns true for valid trees",
+        "At least 15 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1013",
+      "title": "Flow-weighted radius assignment",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 3,
+      "milestone": "P3",
+      "blockedBy": ["VESSEL-1012"],
+      "description": "Enhance the hemodynamic model with flow-weighted radius assignment instead of equal terminal flow.\n\nIn a real tree, terminal segments serve different tissue volumes. Segments deeper in the myocardium or serving larger territories should get more flow.\n\nUpdate src/hemodynamics.jl:\n\n1. assign_terminal_flows!(tree, domain, params)\n   Weight terminal flow by the estimated tissue volume each terminal serves.\n   Use Voronoi-like territory: each terminal's flow proportional to its territory volume.\n   AK kernel: for each terminal, estimate territory volume (approximate by nearest-neighbor distance).\n\n2. recompute_radii_from_flow!(tree, params)\n   Given new flow distribution, recompute radii using Murray's law.\n   This creates more realistic radius variation.\n\nCreate additional tests for flow-weighted assignment.",
+      "acceptanceCriteria": [
+        "Terminal flows are weighted by territory, not uniform",
+        "Radii update correctly from flow-weighted assignment",
+        "Murray's law still holds at every bifurcation",
+        "Total flow is conserved",
+        "At least 10 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1014",
+      "title": "Kassab: Strahler ordering + asymmetry sampling",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 4,
+      "milestone": "P4",
+      "blockedBy": ["VESSEL-1002", "VESSEL-1010"],
+      "description": "Implement Kassab's diameter-defined Strahler ordering and asymmetry ratio sampling.\n\nCreate src/kassab.jl:\n\n1. assign_strahler_orders!(topology, segments, params)\n   AK kernel: for each segment, classify Strahler order based on diameter using params.diameter_bounds.\n   Store in topology.strahler_order.\n\n2. sample_asymmetry(params, rng) -> Float64\n   Sample from Beta(2.5, 0.8), clamp to [min_asymmetry, 1.0].\n   Returns ratio Ds/Dl (smaller/larger daughter diameter).\n\n3. compute_daughter_radii(r_parent, asymmetry, gamma) -> (r_large, r_small)\n   From Murray's law + asymmetry ratio:\n   r_large = r_parent / (1 + asymmetry^gamma)^(1/gamma)\n   r_small = asymmetry * r_large\n\n4. apply_kassab_radii!(tree, params)\n   For each bifurcation, sample asymmetry and compute daughter radii.\n   Then propagate changes through the tree.\n\n5. Update grow_tree! to use Kassab asymmetry when assigning daughter radii.\n\nCreate test/test_kassab.jl:\n- Strahler ordering matches hand-computed examples\n- Asymmetry samples follow Beta(2.5, 0.8) distribution (KS test)\n- Daughter radii satisfy Murray's law with sampled asymmetry\n- Order assignments match Kassab diameter bounds exactly",
+      "acceptanceCriteria": [
+        "Strahler ordering computed via AK kernel on diameter array",
+        "Asymmetry follows Beta(2.5, 0.8) — verified by KS test",
+        "compute_daughter_radii satisfies Murray's law (gamma=7/3)",
+        "Growth loop uses Kassab asymmetry for daughter radii",
+        "At least 15 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1015",
+      "title": "Kassab: Connectivity matrix validation",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 4,
+      "milestone": "P4",
+      "blockedBy": ["VESSEL-1014"],
+      "description": "Implement connectivity matrix construction and validation against Kassab 1993.\n\nAdd to src/kassab.jl:\n\n1. build_empirical_connectivity(tree, params) -> Matrix{Float64}\n   For each bifurcation in the tree, record (parent_order, daughter1_order, daughter2_order).\n   Build the empirical connectivity matrix: C[m,n] = probability that order-m parent has order-n daughter.\n\n2. validate_connectivity(empirical_matrix, kassab_matrix) -> (chi2_stat, p_value)\n   Chi-squared test comparing empirical vs Kassab connectivity.\n\n3. constrain_connectivity!(tree, params)\n   Post-hoc adjustment: if a bifurcation violates connectivity constraints\n   (e.g., order 10 parent with order 2 daughter, which Kassab says probability ~0),\n   adjust the daughter radius to fall within a valid order.\n\nAdd to test/test_kassab.jl:\n- Build connectivity matrix from a generated tree\n- Verify matrix rows sum to ~1.0\n- After constrain_connectivity!, chi-squared p-value improves",
+      "acceptanceCriteria": [
+        "Empirical connectivity matrix computed correctly",
+        "Chi-squared test compares against Kassab matrix",
+        "constrain_connectivity! improves p-value",
+        "Matrix rows sum to approximately 1.0",
+        "At least 10 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1016",
+      "title": "Kassab: Integrated constraint enforcement in growth loop",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 4,
+      "milestone": "P4",
+      "blockedBy": ["VESSEL-1014", "VESSEL-1015"],
+      "description": "Integrate Kassab constraints into the CCO growth loop so they are enforced during tree construction, not just post-hoc.\n\nUpdate src/growth.jl:\n\n1. When adding a bifurcation:\n   a. Sample asymmetry from Kassab distribution\n   b. Compute daughter radii via Murray's law + asymmetry\n   c. Assign Strahler orders to new segments\n   d. Check connectivity matrix: is this parent-daughter order combination valid?\n   e. If invalid, resample asymmetry or adjust radii until valid\n\n2. After adding a bifurcation:\n   a. Update Strahler orders for affected segments\n   b. Propagate radius changes\n\n3. Length enforcement:\n   a. Check that segment length/diameter ratio is near Kassab's 16.8\n   b. If too far off, adjust bifurcation point slightly\n\nUpdate tests to verify Kassab constraints hold during growth.",
+      "acceptanceCriteria": [
+        "Kassab constraints enforced during growth, not post-hoc",
+        "Asymmetry distribution maintained throughout growth",
+        "Connectivity matrix violations < 5% of bifurcations",
+        "L/D ratio within 2 sigma of Kassab's 16.8",
+        "Existing tests still pass",
+        "At least 10 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1017",
+      "title": "Barabasi: Chi/rho parameters + junction geometry",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 5,
+      "milestone": "P5",
+      "blockedBy": ["VESSEL-1003", "VESSEL-1010"],
+      "description": "Implement Barabasi's junction geometry rules.\n\nCreate src/barabasi.jl:\n\n1. compute_chi(parent_radius, node_distance) -> Float64\n   chi = 2*pi*parent_radius / node_distance\n   Determines whether trifurcation is stable (chi > 0.83).\n\n2. compute_rho(r_small, r_large) -> Float64\n   rho = r_small / r_large\n   Determines sprouting vs branching.\n\n3. compute_junction_angles(rho, params) -> (angle_large, angle_small)\n   If rho < params.sprouting_threshold: SPROUTING\n     angle_large = 0 (continues straight), angle_small = pi/2 (perpendicular)\n   If rho >= params.sprouting_threshold: BRANCHING\n     Both deflect, Omega = params.branching_slope * (rho - rho_th)\n     Distribute: angle_small gets more deflection\n\n4. apply_junction_geometry!(tree, bifurc_idx, params)\n   Given a bifurcation, compute rho, determine sprouting/branching,\n   and rotate daughter segment endpoints to match the correct angles.\n\n5. classify_junction_type(rho, params) -> Symbol\n   Returns :sprouting or :branching\n\nCreate test/test_barabasi.jl:\n- rho < 0.83 -> sprouting angles (0, pi/2)\n- rho = 1.0 -> symmetric branching (~60 deg each)\n- rho = 0.83 (threshold) -> minimal branching\n- chi < 0.83 -> bifurcation, chi > 0.83 -> trifurcation eligible\n- Angle distribution on generated tree is bimodal (sprouting peak + branching peak)",
+      "acceptanceCriteria": [
+        "Chi and rho parameters computed correctly",
+        "Sprouting regime produces ~90 deg small branch",
+        "Branching regime produces symmetric-ish angles for rho~1",
+        "Junction type classification is correct",
+        "apply_junction_geometry! modifies daughter endpoints correctly",
+        "At least 15 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1018",
+      "title": "Barabasi: Trifurcation detection + handling",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 5,
+      "milestone": "P5",
+      "blockedBy": ["VESSEL-1017"],
+      "description": "Implement trifurcation (k=4 nodes) as predicted by Barabasi when chi > 0.83.\n\nUpdate src/barabasi.jl:\n\n1. check_trifurcation_merge(tree, new_bifurc_point, params) -> Union{Nothing, Int32}\n   Check if the new bifurcation should merge with a nearby existing bifurcation.\n   Search radius = f(parent_radius).\n   If a nearby bifurcation exists AND chi > 0.83: return its index for merging.\n\n2. merge_to_trifurcation!(tree, existing_bifurc_idx, new_terminal, params)\n   Convert existing bifurcation to trifurcation:\n   - The existing bifurcation node now has 3 daughters (child3_id gets populated)\n   - Set junction_type to :trifurcation\n   - Compute 3-way angle distribution\n   - Update topology\n\n3. Update grow_tree! to check for trifurcation before creating bifurcation.\n\n4. compute_trifurcation_angles(r1, r2, r3, params) -> NTuple{3, Float64}\n   Three-way angle distribution minimizing surface cost.\n\nUpdate types.jl if needed to support trifurcations (child3_id already in topology).\n\nCreate additional tests:\n- Force a scenario where chi > 0.83 -> verify trifurcation created\n- Verify topology is correct after trifurcation (3 children)\n- Verify Murray's law at trifurcation: r_parent^gamma = r1^gamma + r2^gamma + r3^gamma",
+      "acceptanceCriteria": [
+        "Trifurcation detection works based on chi threshold",
+        "merge_to_trifurcation! correctly updates topology to 3 daughters",
+        "Murray's law holds at trifurcations (3-way sum)",
+        "Growth loop creates trifurcations when appropriate",
+        "5-20% of junctions are trifurcations in large trees",
+        "At least 10 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1019",
+      "title": "Barabasi: Surface cost function + integration into growth",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 5,
+      "milestone": "P5",
+      "blockedBy": ["VESSEL-1017", "VESSEL-1018"],
+      "description": "Replace volume cost with surface cost in the CCO growth loop, following Barabasi.\n\nUpdate src/kamiya.jl:\n\n1. Modify surface_cost_at_t to include proper junction surface estimate:\n   Junction surface = f(r_parent, r_daughter1, r_daughter2, angles)\n   For tubes: approximate junction surface using the pants decomposition estimate.\n\n2. For sprouting junctions (rho < 0.83):\n   Junction surface is smaller (small branch barely disturbs parent surface).\n\n3. For branching junctions (rho >= 0.83):\n   Junction surface is larger (both daughters create significant surface).\n\nUpdate src/growth.jl:\n- Apply junction geometry (Barabasi angles) when adding each bifurcation\n- The daughter endpoints should reflect the computed angles, not just straight splaying\n\nIntegration test:\n- Grow a 1000-terminal tree with Barabasi geometry active\n- Verify angle distribution is bimodal\n- Verify trifurcation percentage is 5-20%\n- Verify tree is still valid (no intersections, Murray's law holds)",
+      "acceptanceCriteria": [
+        "Surface cost includes junction surface estimate",
+        "Sprouting junctions have lower surface cost than branching",
+        "Bifurcation angles reflect Barabasi geometry in the actual tree",
+        "1000-terminal tree with Barabasi + Kassab constraints generates without error",
+        "Angle distribution is bimodal",
+        "At least 10 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1020",
+      "title": "Validation framework + diameter/asymmetry tests",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 6,
+      "milestone": "P6",
+      "blockedBy": ["VESSEL-1016", "VESSEL-1019"],
+      "description": "Implement statistical validation of generated trees against Kassab data.\n\nCreate src/validation.jl:\n\n1. ValidationReport struct — holds all test results\n\n2. validate_tree(tree, params) -> ValidationReport\n   Run all validation metrics:\n\n   a. Diameter distribution by Strahler order:\n      For each order, extract all segment diameters.\n      KS test against Kassab distribution (Normal with Kassab mean, SD).\n      Report p-value per order.\n\n   b. Asymmetry ratio distribution:\n      For each bifurcation, compute Ds/Dl.\n      KS test against Beta(2.5, 0.8).\n      Report median (target: 0.72-0.80).\n\n   c. Length/Diameter ratio:\n      Compute L/D for all segments.\n      Report mean (target: 16.8 +/- 2.3).\n\n   d. Branching angle distribution:\n      Compute angles at all bifurcations.\n      Report mean, std, and check for bimodality.\n\n3. print_report(report) — formatted summary\n\n4. Use AK kernels for all bulk computations (diameter extraction, angle computation, etc.)\n\nCreate test/test_validation.jl:\n- Generate a 1000-terminal tree, run validation\n- Diameter KS p-values > 0.05 for at least 8/12 orders\n- Asymmetry median in [0.72, 0.80]\n- L/D ratio mean in [14.5, 19.1]",
+      "acceptanceCriteria": [
+        "ValidationReport struct captures all metrics",
+        "KS tests for diameter distribution by order",
+        "KS test for asymmetry ratio distribution",
+        "L/D ratio statistics computed",
+        "Branching angle statistics computed",
+        "All bulk computations use AK kernels",
+        "At least 15 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1021",
+      "title": "Full validation suite: connectivity + trifurcation + P(lambda)",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 6,
+      "milestone": "P6",
+      "blockedBy": ["VESSEL-1020"],
+      "description": "Complete the validation suite with connectivity matrix, trifurcation percentage, and P(lambda) tests.\n\nAdd to src/validation.jl:\n\n1. Connectivity matrix validation:\n   Build empirical matrix from tree, compare to Kassab via chi-squared.\n\n2. Trifurcation percentage:\n   Count trifurcations / (bifurcations + trifurcations).\n   Target: 5-20% (from Barabasi blood vessel data).\n\n3. P(lambda) distribution:\n   lambda = l/w for each junction (distance between intermediate nodes / link circumference).\n   P(lambda -> 0) should be > 0 (indicates stable trifurcations exist).\n   Compare shape to Barabasi Fig 3 blood vessel curve.\n\n4. Murray's law compliance:\n   For every bifurcation, compute |r_parent^gamma - (r1^gamma + r2^gamma)| / r_parent^gamma.\n   Report max deviation and mean deviation.\n\n5. Add all to validate_tree() and print_report().\n\nCreate comprehensive tests.",
+      "acceptanceCriteria": [
+        "Connectivity matrix chi-squared test implemented",
+        "Trifurcation percentage reported and in [5%, 20%]",
+        "P(lambda) distribution computed",
+        "Murray's law deviation reported (should be < 1e-6)",
+        "Full validate_tree covers all 6+ metrics",
+        "At least 10 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1022",
+      "title": "Territory partitioning + collision avoidance",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 7,
+      "milestone": "P7",
+      "blockedBy": ["VESSEL-1011", "VESSEL-1016"],
+      "description": "Implement territory partitioning for multi-tree forest generation.\n\nCreate src/forest.jl:\n\n1. TerritoryMap — 3D voxel grid assigning each region to a tree\n   - initialize_territories(domain, tree_configs) -> TerritoryMap\n   - Initially partition by proximity to root positions\n   - update_territories!(map, trees) — re-partition based on tree growth\n\n2. TreeConfig struct:\n   - name::String (e.g., \"LAD\", \"LCX\", \"RCA\")\n   - root_position, root_radius, root_direction\n   - target_terminals::Int\n   - territory_fraction::Float64 (e.g., 0.40 for LAD)\n\n3. sample_in_territory(domain, territory_map, tree_name, rng) -> point\n   Sample candidate point within a specific tree's territory.\n\n4. check_inter_tree_collision(point, other_trees, min_distance) -> Bool\n   Verify new segment doesn't collide with segments from other trees.\n   Uses AK distance kernels against combined segment arrays.\n\nCreate test/test_forest.jl:\n- Territory initialization correctly partitions space\n- Sampling respects territory boundaries\n- Inter-tree collision detection works",
+      "acceptanceCriteria": [
+        "TerritoryMap correctly partitions domain among trees",
+        "Sampling is confined to correct territory",
+        "Inter-tree collision detection uses AK kernels",
+        "Territory fractions approximately match target",
+        "At least 10 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1023",
+      "title": "Multi-tree forest growth (LAD + LCX + RCA)",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 7,
+      "milestone": "P7",
+      "blockedBy": ["VESSEL-1022"],
+      "description": "Implement simultaneous growth of multiple trees to create a complete coronary forest.\n\nAdd to src/forest.jl:\n\n1. CoronaryForest struct:\n   - trees::Dict{String, VascularTree}\n   - territory_map::TerritoryMap\n   - params::MorphometricParams\n\n2. generate_coronary_forest(domain, params; tree_configs, rng) -> CoronaryForest\n   Round-robin growth: add one terminal to each tree in turn.\n   After each round, update territory map.\n   Continue until all trees reach target_terminals.\n\n3. coronary_tree_configs() -> Vector{TreeConfig}\n   Default LAD (40%), LCX (25%), RCA (35%) configuration.\n   Root positions at appropriate coronary ostia locations.\n\n4. validate_forest(forest, params) -> ForestValidationReport\n   Validate each tree individually + check inter-tree properties:\n   - No inter-tree intersections\n   - Territory coverage > 95%\n   - Each tree passes individual validation\n\nCreate test/test_forest.jl:\n- Generate small forest (3 trees, 200 terminals each)\n- No inter-tree intersections\n- Each tree passes individual validation\n- Territory coverage > 90%",
+      "acceptanceCriteria": [
+        "CoronaryForest holds multiple trees with territory map",
+        "Round-robin growth produces balanced trees",
+        "No inter-tree intersections",
+        "coronary_tree_configs provides reasonable defaults",
+        "Forest validation covers individual + inter-tree checks",
+        "At least 10 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1024",
+      "title": "JLD2 save/load + VTP export",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 8,
+      "milestone": "P8",
+      "blockedBy": ["VESSEL-1010"],
+      "description": "Implement persistence and visualization export.\n\nCreate src/export.jl:\n\n1. save_tree(filename, tree) — JLD2 serialization\n   save_forest(filename, forest)\n\n2. load_tree(filename) -> VascularTree\n   load_forest(filename) -> CoronaryForest\n\n3. export_vtp(tree, filename)\n   Export as VTK PolyData for ParaView visualization.\n   Each segment becomes a line with radius, flow, pressure, order as point/cell data.\n   Uses WriteVTK.jl.\n\n4. export_centerlines_vtp(tree, filename)\n   Export just centerlines (no cylinder mesh) — fast, good for ParaView tubes filter.\n\n5. export_forest_vtp(forest, directory)\n   Export each tree as separate VTP + combined VTP.\n\nCreate test/test_export.jl:\n- Save and reload tree, verify identical\n- VTP file is valid (can be parsed back)\n- Centerlines export works",
+      "acceptanceCriteria": [
+        "JLD2 save/load roundtrip produces identical tree",
+        "VTP export creates valid file with segment attributes",
+        "Centerlines VTP works with ParaView tubes filter",
+        "Forest export creates per-tree + combined files",
+        "At least 10 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1025",
+      "title": "Makie visualization",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 8,
+      "milestone": "P8",
+      "blockedBy": ["VESSEL-1010"],
+      "description": "Implement Makie-based visualization for quick inspection of generated trees.\n\nCreate src/visualization.jl (loaded via extension or optional import):\n\n1. plot_tree(tree; color_by=:order, backend=CairoMakie)\n   3D visualization of tree segments as colored lines.\n   Color by: Strahler order, radius, pressure, flow.\n   Line width proportional to radius.\n\n2. plot_tree_2d(tree; projection=:xy, color_by=:order)\n   2D projection for quick inspection.\n\n3. plot_validation_report(report)\n   Multi-panel figure:\n   - Diameter histogram by order vs Kassab\n   - Asymmetry ratio distribution vs Beta(2.5, 0.8)\n   - Angle histogram (should show bimodal)\n   - Connectivity matrix heatmap\n\n4. plot_forest(forest; color_by=:tree)\n   Color segments by which tree they belong to.\n\nNote: Makie should be a weak dependency (extension) to avoid heavy load times for non-visualization use.",
+      "acceptanceCriteria": [
+        "plot_tree renders 3D tree colored by Strahler order",
+        "plot_tree_2d renders 2D projection",
+        "plot_validation_report creates multi-panel validation figure",
+        "Makie is a weak dependency (package loads without Makie)",
+        "At least 5 tests (or visual smoke tests)"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1026",
+      "title": "STL mesh export + graph export",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 8,
+      "milestone": "P8",
+      "blockedBy": ["VESSEL-1024"],
+      "description": "Implement mesh and graph export formats.\n\nAdd to src/export.jl:\n\n1. export_stl(tree, filename; circumferential_resolution=16)\n   Generate cylinder mesh for each segment using AK kernel:\n   - AK.foreachindex: for each segment, generate circumferential_resolution vertices at each end\n   - Connect with triangles\n   - Junction smoothing (optional)\n   Write as binary STL.\n\n2. export_graph_json(tree, filename)\n   Export tree topology as JSON graph:\n   - Nodes: bifurcations + terminals with position, radius\n   - Edges: segments with length, radius, flow, order\n   Compatible with network analysis tools.\n\n3. export_csv(tree, filename)\n   Flat CSV of all segments for spreadsheet analysis.\n\nMesh generation MUST use AK.foreachindex for cylinder vertex computation.",
+      "acceptanceCriteria": [
+        "STL export generates valid mesh (watertight per segment)",
+        "Cylinder vertex generation uses AK kernel",
+        "Graph JSON export is valid JSON with nodes + edges",
+        "CSV export has all segment attributes",
+        "At least 5 tests passing"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1027",
+      "title": "End-to-end demo + documentation",
+      "type": "VERIFY",
+      "status": "open",
+      "priority": 8,
+      "milestone": "P8",
+      "blockedBy": ["VESSEL-1021", "VESSEL-1023", "VESSEL-1024", "VESSEL-1025"],
+      "description": "Create end-to-end demo scripts and comprehensive documentation.\n\nCreate examples/:\n\n1. examples/basic_tree.jl\n   Generate a single 1000-terminal coronary tree.\n   Validate against Kassab.\n   Export VTP.\n   Print validation report.\n\n2. examples/coronary_forest.jl\n   Generate complete LAD+LCX+RCA forest.\n   Validate each tree + forest.\n   Export combined VTP.\n\n3. examples/custom_vasculature.jl\n   Show how to create custom parameters for non-coronary vasculature.\n   Example: cerebral tree with different diameter distributions.\n\nUpdate README.md:\n- Quick start code\n- Architecture overview\n- Key scientific references\n- Validation results summary\n\nRun full validation on a large tree (5000 terminals) and document results.\n\nVerify: `using VesselTree` loads, all examples run, all tests pass.",
+      "acceptanceCriteria": [
+        "basic_tree.jl runs end-to-end and produces valid VTP",
+        "coronary_forest.jl runs and produces 3-tree forest",
+        "custom_vasculature.jl demonstrates parameter customization",
+        "README has quick start, architecture, and references",
+        "Full test suite passes",
+        "Validation report on 5000-terminal tree documented in progress.md",
+        "Package loads cleanly with `using VesselTree`"
+      ]
+    }
+  ]
+}
