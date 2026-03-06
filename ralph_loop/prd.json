@@ -9,7 +9,7 @@
     "science": "CCO growth + Kassab morphometry (gamma=7/3, asymmetry Beta(2.5,0.8)) + Barabasi surface optimization (chi/rho thresholds at 0.83)"
   },
   "milestones": {
-    "P0": { "name": "Discovery", "stories": 4, "done": 0 },
+    "P0": { "name": "Discovery", "stories": 4, "done": 1 },
     "P1": { "name": "Foundation", "stories": 3, "done": 0 },
     "P2": { "name": "CCO Engine", "stories": 5, "done": 0 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
@@ -25,7 +25,8 @@
       "id": "VESSEL-1000",
       "title": "DISCOVERY: AcceleratedKernels.jl API for tree algorithms",
       "type": "DISCOVERY",
-      "status": "open",
+      "status": "done",
+      "completedNote": "All 10 research questions answered with verified code snippets. Key findings: no argmin/argmax (use mapreduce), merge_sort_by_key GPU-only, SoA+views confirmed working, CPU crossover at ~100K elements, closures must be in function scope for GPU.",
       "priority": 0,
       "milestone": "P0",
       "blockedBy": [],
