@@ -59,6 +59,6 @@ export ValidationReport, validate_tree, print_report
 export TreeConfig, TerritoryMap, initialize_territories, query_territory
 export sample_in_territory, check_inter_tree_collision, coronary_tree_configs
 export estimate_total_segments, estimate_subdivision_capacity, subdivide_terminals!
-export CoronaryForest, generate_coronary_forest, validate_forest
+export CoronaryForest, generate_coronary_forest, generate_kassab_coronary, validate_forest
 
 end # module VesselTree

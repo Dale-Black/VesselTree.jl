@@ -18,7 +18,7 @@
     "P6": { "name": "Validation", "stories": 2, "done": 2 },
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 0 },
-    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 3 }
+    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 4 }
   },
   "stories": [
 
@@ -633,7 +633,8 @@
       "id": "VESSEL-1031",
       "title": "Full pipeline: generate_kassab_coronary!",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Fixed terminal_radius to use handoff_order diameter for subdivision. Added Barabasi junction geometry (top-down) in Phase 3. Phase 4 now runs validate_tree + print_report for each artery when verbose. Exported generate_kassab_coronary. 7 testsets with 14167 assertions in test_pipeline.jl.",
       "priority": 7,
       "milestone": "P9",
       "blockedBy": ["VESSEL-1028", "VESSEL-1029", "VESSEL-1030"],

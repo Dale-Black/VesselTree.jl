@@ -452,3 +452,19 @@
   - Murray's law deviation < 1% with floor enforcement; exact (< 1e-6) without floor
   - update_radii! is nearly idempotent after apply_full_kassab_radii! (rtol < 0.01)
 - Next: VESSEL-1031 (Full pipeline: generate_kassab_coronary!)
+
+### 2026-03-06: VESSEL-1031 [PASS]
+- Attempted: Complete the generate_kassab_coronary full pipeline (CCO + subdivision + refinement + validation)
+- Result: 14167 new tests pass (21008 total), all acceptance criteria met
+- Regression gate: 21008 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/forest.jl — Fixed terminal_radius to use handoff_order diameter; added Barabasi junction geometry in Phase 3 (top-down via _topo_order); Phase 4 now prints validate_tree reports; increased capacity multiplier (2x→5x) for Poisson variance
+  - src/VesselTree.jl — exported generate_kassab_coronary
+  - test/test_pipeline.jl — 7 testsets: forest structure, subdivision orders, diameter range, Murray's law, positive radii/lengths, validation report, verbose mode
+  - test/runtests.jl — include test_pipeline.jl
+- Learning:
+  - CCO terminal_radius MUST use handoff_order diameter (not order-0 capillary diameter) for subdivision to work — otherwise all terminals are order 0 and subdivide_terminals! skips them
+  - Capacity estimation needs 5x multiplier (not 2x) because Poisson sampling can produce significantly more daughters than expected values, especially for higher-order terminals with deep recursion
+  - Barabasi geometry must be applied in topological (BFS) order so parent directions are set before rotating children
+  - With handoff_order=3, 20 terminals produce ~7000 segments after subdivision — expansion is significant
+- Next: VESSEL-1032 (Comprehensive Kassab validation + connectivity matrix audit)

@@ -368,6 +368,257 @@ function generate_coronary_forest(
 end
 
 """
+    generate_kassab_coronary(domain, params; rng, verbose, handoff_order, tree_configs) -> CoronaryForest
+
+Full pipeline: CCO skeleton + statistical subdivision + Kassab radius refinement.
+
+1. **CCO phase**: Grid-accelerated multi-tree growth with territory partitioning.
+   kassab=false (symmetric radii during growth).
+2. **Subdivision phase**: subdivide_terminals! per tree using Kassab CM.
+3. **Refinement phase**: apply_full_kassab_radii! + Barabasi junction geometry.
+4. **Validation**: validate_tree per tree (printed if verbose).
+"""
+function generate_kassab_coronary(
+    domain::AbstractDomain,
+    params::MorphometricParams;
+    rng::AbstractRNG=Random.default_rng(),
+    verbose::Bool=false,
+    handoff_order::Int=5,
+    tree_configs::Vector{TreeConfig}=coronary_tree_configs(),
+)
+    # Phase 1: CCO skeleton growth (kassab=false for symmetric radii)
+    if verbose
+        println("Phase 1: CCO skeleton growth...")
+    end
+
+    # Estimate capacity: CCO skeleton + subdivision expansion
+    max_terminals = maximum(cfg.target_terminals for cfg in tree_configs)
+    skeleton_capacity = max_terminals * 3
+    # Estimate subdivision expansion based on handoff order
+    expansion = estimate_total_segments(handoff_order, params)
+    total_capacity = min(skeleton_capacity * expansion * 5, 10_000_000)  # cap at 10M per tree
+
+    # Build forest with increased capacity
+    cco_configs = [
+        TreeConfig(cfg.name, cfg.root_position, cfg.root_radius, cfg.root_direction,
+                   cfg.target_terminals, cfg.territory_fraction)
+        for cfg in tree_configs
+    ]
+
+    # Use generate_coronary_forest for CCO phase but with expanded capacity
+    tmap = initialize_territories(domain, cco_configs)
+    gamma = params.gamma
+
+    trees = Dict{String, VascularTree}()
+    for cfg in cco_configs
+        tree = VascularTree(cfg.name, total_capacity)
+        dx, dy, dz = cfg.root_direction
+        dlen = sqrt(dx^2 + dy^2 + dz^2)
+        if dlen > 0
+            dx /= dlen; dy /= dlen; dz /= dlen
+        else
+            dx, dy, dz = 1.0, 0.0, 0.0
+        end
+        root_len = cfg.root_radius * 5.0
+        distal = (
+            cfg.root_position[1] + dx * root_len,
+            cfg.root_position[2] + dy * root_len,
+            cfg.root_position[3] + dz * root_len,
+        )
+        add_segment!(tree, cfg.root_position, distal, cfg.root_radius, Int32(-1))
+        trees[cfg.name] = tree
+    end
+
+    # CCO growth phase — use handoff_order diameter for terminals so
+    # subdivide_terminals! can recursively fill orders below handoff
+    terminal_radius = params.diameter_mean[handoff_order + 1] / 2.0 / 1000.0
+    max_rounds = max_terminals * 50
+    added = Dict(cfg.name => 0 for cfg in cco_configs)
+    domain_size = _domain_size(domain)
+
+    buffers = Dict{String, NamedTuple}()
+    grids = Dict{String, SpatialGrid}()
+    last_rebuild = Dict{String, Int}()
+    grid_rebuild_interval = 100
+
+    for cfg in cco_configs
+        cap = total_capacity
+        buffers[cfg.name] = (
+            distances = zeros(cap),
+            costs = zeros(cap),
+            bifurc_t = zeros(cap),
+            intersect = Vector{Bool}(undef, cap),
+        )
+        tree = trees[cfg.name]
+        cs = _grid_cell_size(domain_size, max(tree.segments.n, 10))
+        grids[cfg.name] = build_grid(tree.segments, tree.segments.n, domain, cs)
+        last_rebuild[cfg.name] = tree.segments.n
+    end
+
+    round = 0
+    while round < max_rounds
+        round += 1
+        all_done = true
+
+        for cfg in cco_configs
+            added[cfg.name] >= cfg.target_terminals && continue
+            all_done = false
+
+            tree = trees[cfg.name]
+            buf = buffers[cfg.name]
+            n = tree.segments.n
+
+            if n - last_rebuild[cfg.name] >= grid_rebuild_interval
+                cs = _grid_cell_size(domain_size, n)
+                grids[cfg.name] = build_grid(tree.segments, n, domain, cs)
+                last_rebuild[cfg.name] = n
+            end
+            grid = grids[cfg.name]
+
+            d_thresh = domain_size / (10.0 * (n + 1)^(1.0 / 3.0))
+
+            pt = sample_in_territory(domain, tmap, cfg.name, rng)
+            pt === nothing && continue
+
+            tx, ty, tz = pt
+
+            collision = false
+            for (other_name, other_tree) in trees
+                other_name == cfg.name && continue
+                if check_inter_tree_collision((tx, ty, tz), other_tree, d_thresh)
+                    collision = true
+                    break
+                end
+            end
+            collision && continue
+
+            K = min(n, 20)
+            search_radius = d_thresh * 5.0
+            nearest = _find_nearest_via_grid(grid, tree.segments, buf.distances, tx, ty, tz, search_radius, K, n)
+
+            seg_idx = 0
+            t_opt = 0.5
+            best_cost = Inf
+            found = false
+
+            for ki in 1:length(nearest)
+                ci = nearest[ki]
+
+                ti, costi = optimize_bifurcation_point(
+                    tree.segments.proximal_x[ci], tree.segments.proximal_y[ci], tree.segments.proximal_z[ci],
+                    tree.segments.distal_x[ci], tree.segments.distal_y[ci], tree.segments.distal_z[ci],
+                    tree.segments.radius[ci], tx, ty, tz, gamma)
+
+                costi >= best_cost && continue
+
+                bx = tree.segments.proximal_x[ci] + ti * (tree.segments.distal_x[ci] - tree.segments.proximal_x[ci])
+                by = tree.segments.proximal_y[ci] + ti * (tree.segments.distal_y[ci] - tree.segments.proximal_y[ci])
+                bz = tree.segments.proximal_z[ci] + ti * (tree.segments.distal_z[ci] - tree.segments.proximal_z[ci])
+
+                parent_r = tree.segments.radius[ci]
+                intersect_dist = max(parent_r * 2.0, d_thresh * 0.01)
+                check_intersections!(buf.intersect, tree.segments, bx, by, bz, tx, ty, tz, intersect_dist, n)
+
+                buf.intersect[ci] = false
+                topo = tree.topology
+                pp = topo.parent_id[ci]
+                if pp > 0
+                    buf.intersect[pp] = false
+                    for c in (topo.child1_id[pp], topo.child2_id[pp], topo.child3_id[pp])
+                        c > 0 && (buf.intersect[c] = false)
+                    end
+                end
+                for c in (topo.child1_id[ci], topo.child2_id[ci], topo.child3_id[ci])
+                    c > 0 && (buf.intersect[c] = false)
+                end
+
+                has_any_intersection(buf.intersect, n) && continue
+                check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz)) && continue
+
+                best_cost = costi
+                seg_idx = ci
+                t_opt = ti
+                found = true
+            end
+
+            !found && continue
+
+            n_before = tree.segments.n
+            cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radius)
+            update_radii!(tree, gamma)
+
+            _insert_segment_to_grid!(grid, tree.segments, seg_idx)
+            for new_seg_idx in (n_before + 1):tree.segments.n
+                _insert_segment_to_grid!(grid, tree.segments, new_seg_idx)
+            end
+
+            added[cfg.name] += 1
+        end
+
+        all_done && break
+    end
+
+    if verbose
+        for cfg in cco_configs
+            println("  $(cfg.name): $(added[cfg.name]) / $(cfg.target_terminals) CCO terminals, $(trees[cfg.name].segments.n) skeleton segments")
+        end
+    end
+
+    # Phase 2: Statistical subdivision
+    if verbose
+        println("Phase 2: Statistical subdivision...")
+    end
+
+    for (name, tree) in trees
+        subdivide_terminals!(tree, params; rng=rng)
+        if verbose
+            println("  $(name): $(tree.segments.n) segments after subdivision")
+        end
+    end
+
+    # Phase 3: Refinement
+    if verbose
+        println("Phase 3: Kassab radius refinement + Barabasi geometry...")
+    end
+
+    for (name, tree) in trees
+        apply_full_kassab_radii!(tree, params; rng=rng)
+
+        # Apply Barabasi junction geometry in topological (top-down) order
+        # sequential: tree traversal for correct parent-before-child ordering
+        topo_ord = _topo_order(tree)
+        for k in 1:length(topo_ord)
+            i = topo_ord[k]
+            if tree.topology.junction_type[i] == :bifurcation
+                apply_junction_geometry!(tree, Int32(i), params)
+            elseif tree.topology.junction_type[i] == :trifurcation
+                apply_trifurcation_geometry!(tree, Int32(i), params)
+            end
+        end
+
+        if verbose
+            println("  $(name): radii + geometry applied")
+        end
+    end
+
+    # Phase 4: Validation
+    forest = CoronaryForest(trees, tmap, params)
+
+    if verbose
+        println("Phase 4: Validation...")
+        for (name, tree) in sort(collect(forest.trees), by=x->x[1])
+            report = validate_tree(tree, params)
+            println("\n  --- $(name) ---")
+            print_report(stdout, report)
+        end
+        total = sum(t.segments.n for (_, t) in trees)
+        println("\n  Total: $total segments")
+    end
+
+    return forest
+end
+
+"""
     validate_forest(forest, params) -> Dict{Symbol, Any}
 
 Validate a multi-tree forest. Returns a dict with per-tree and inter-tree metrics.
