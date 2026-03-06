@@ -159,6 +159,48 @@ function evaluate_all_connections!(
 end
 
 """
+    junction_surface_estimate(r_parent, r_large, r_small, params) -> Float64
+
+Estimate the junction surface area (pants decomposition approximation).
+Sprouting junctions (rho < 0.83) have smaller surface than branching.
+"""
+function junction_surface_estimate(r_parent::Float64, r_large::Float64, r_small::Float64, params::MorphometricParams)
+    rho = r_small / max(r_large, 1e-20)
+    rho_th = params.sprouting_rho_th
+    base = 2π * r_parent
+
+    if rho < rho_th
+        # Sprouting: small branch adds minimal junction surface
+        return base * r_small * 0.5
+    else
+        # Branching: both daughters create significant junction surface
+        return base * (r_large + r_small) * 0.5
+    end
+end
+
+"""
+    surface_cost_with_junction(t, seg_px, seg_py, seg_pz, seg_dx, seg_dy, seg_dz,
+                                seg_radius, tx, ty, tz, gamma, params) -> Float64
+
+Surface cost including junction surface estimate (Barabasi).
+"""
+@inline function surface_cost_with_junction(
+    t::Float64,
+    seg_px::Float64, seg_py::Float64, seg_pz::Float64,
+    seg_dx::Float64, seg_dy::Float64, seg_dz::Float64,
+    seg_radius::Float64,
+    tx::Float64, ty::Float64, tz::Float64,
+    gamma::Float64,
+    params::MorphometricParams,
+)
+    tube_cost = surface_cost_at_t(t, seg_px, seg_py, seg_pz, seg_dx, seg_dy, seg_dz,
+                                   seg_radius, tx, ty, tz, gamma)
+    r1, r2 = compute_radii_symmetric(seg_radius, gamma)
+    junction_cost = junction_surface_estimate(seg_radius, max(r1, r2), min(r1, r2), params)
+    return tube_cost + junction_cost
+end
+
+"""
     select_best_connection(costs, bifurc_t, n) -> (seg_idx, t_opt, cost)
 
 Find the connection with minimum cost. Uses AK.minimum for the parallel min,

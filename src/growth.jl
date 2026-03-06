@@ -112,15 +112,14 @@ function sample_terminal_candidate(
 end
 
 """
-    grow_tree!(tree, domain, n_terminals, params; rng=Random.default_rng(), verbose=false, kassab=false, trifurcation=false)
+    grow_tree!(tree, domain, n_terminals, params; rng, verbose, kassab, trifurcation, barabasi)
 
 Main CCO growth loop. Adds `n_terminals` terminal segments to the tree.
 
-When `kassab=true`, uses Kassab asymmetry sampling for daughter radii instead
-of symmetric bifurcations.
-
-When `trifurcation=true`, checks for trifurcation merges (Barabasi chi > 0.83)
-before creating new bifurcations.
+Keywords:
+- `kassab=false`: Kassab asymmetry sampling for daughter radii
+- `trifurcation=false`: Trifurcation merges when chi > 0.83
+- `barabasi=false`: Apply Barabasi junction geometry (sprouting/branching angles)
 
 The tree must have a root segment already added before calling this function.
 """
@@ -133,6 +132,7 @@ function grow_tree!(
     verbose::Bool=false,
     kassab::Bool=false,
     trifurcation::Bool=false,
+    barabasi::Bool=false,
 )
     capacity = tree.segments.capacity
     gamma = params.gamma
@@ -240,6 +240,11 @@ function grow_tree!(
 
         # Update radii via Murray's law
         update_radii!(tree, gamma)
+
+        # Apply Barabasi junction geometry
+        if barabasi
+            apply_junction_geometry!(tree, Int32(seg_idx), params)
+        end
 
         added += 1
 

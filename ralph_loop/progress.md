@@ -321,3 +321,20 @@
   - Trifurcation rate depends on tree density and parent radii; in dense trees more merges occur
   - Murray's law verified at all trifurcations: r_parent^gamma = r1^gamma + r2^gamma + r3^gamma
 - Next: VESSEL-1019 (Barabasi: Surface cost function + integration into growth)
+
+### 2026-03-05: VESSEL-1019 [PASS]
+- Attempted: Implement surface cost with junction estimate and integrate Barabasi geometry into growth
+- Result: 68 new tests pass (4327 total), P5 Barabasi Geometry milestone complete
+- Regression gate: 4327 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/kamiya.jl — junction_surface_estimate, surface_cost_with_junction
+  - src/growth.jl — grow_tree! gains barabasi=true keyword; applies apply_junction_geometry! after bifurcation
+  - test/test_surface_cost.jl — 10 testsets with 68 tests
+  - test/runtests.jl — include test_surface_cost.jl
+- Learning:
+  - Sprouting junctions have lower surface cost: base * r_small * 0.5 vs base * (r_large + r_small) * 0.5
+  - Junction cost is additive to tube cost in surface_cost_with_junction
+  - Barabasi geometry application rotates daughter endpoints after radii update
+  - With barabasi=true, intersection checks may reject more candidates (rotated segments can intersect)
+  - Angle distribution from grown trees is measurable; mean angle is reasonable
+- Next: VESSEL-1020 (Validation framework + diameter/asymmetry tests)
