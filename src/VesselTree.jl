@@ -5,6 +5,8 @@ using LinearAlgebra
 using Random
 using Distributions
 using StaticArrays
+using JLD2
+using WriteVTK
 
 # Scientific constants
 const MURRAY_GAMMA = 7 / 3           # Huo-Kassab 2007 (NOT 3.0)
@@ -30,6 +32,7 @@ include("hemodynamics.jl")
 include("kassab.jl")
 include("barabasi.jl")
 include("validation.jl")
+include("subdivision.jl")
 include("forest.jl")
 
 export VascularTree, SegmentData, TreeTopology
@@ -55,6 +58,7 @@ export compute_trifurcation_angles, check_trifurcation_merge, merge_to_trifurcat
 export ValidationReport, validate_tree, print_report
 export TreeConfig, TerritoryMap, initialize_territories, query_territory
 export sample_in_territory, check_inter_tree_collision, coronary_tree_configs
+export estimate_total_segments, estimate_subdivision_capacity, subdivide_terminals!
 export CoronaryForest, generate_coronary_forest, validate_forest
 
 end # module VesselTree
