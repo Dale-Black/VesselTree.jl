@@ -43,5 +43,6 @@ export compute_radii_symmetric, compute_radii_asymmetric
 export update_radii!, grow_tree!, add_bifurcation!
 export SpatialGrid, build_grid, query_nearby
 export compute_resistances!, compute_flows!, compute_pressures!, validate_hemodynamics
+export assign_terminal_flows!, recompute_radii_from_flow!
 
 end # module VesselTree

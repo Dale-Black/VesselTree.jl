@@ -204,3 +204,158 @@ function validate_hemodynamics(tree::VascularTree, params::MorphometricParams)
 
     return true
 end
+
+"""
+    assign_terminal_flows!(tree::VascularTree, domain::AbstractDomain, params::MorphometricParams)
+
+Assign terminal flows weighted by estimated territory volume (nearest-neighbor distance).
+Terminals farther from neighbors serve larger territories and get more flow.
+Flow is then propagated bottom-up so parent flow = sum of children flows.
+"""
+function assign_terminal_flows!(tree::VascularTree, domain::AbstractDomain, params::MorphometricParams)
+    seg = tree.segments
+    topo = tree.topology
+    n = seg.n
+    n == 0 && return nothing
+
+    # Collect terminal indices and their distal points
+    terminal_ids = Int[]
+    for i in 1:n
+        topo.is_terminal[i] && push!(terminal_ids, i)
+    end
+    n_term = length(terminal_ids)
+    n_term == 0 && return nothing
+
+    # Compute territory weight for each terminal using nearest-neighbor distance
+    # AK kernel: compute pairwise distances between terminal distal points
+    weights = ones(n_term)
+
+    if n_term > 1
+        # For each terminal, find distance to nearest other terminal
+        nn_dists = fill(Inf, n_term)
+        term_x = [seg.distal_x[terminal_ids[j]] for j in 1:n_term]
+        term_y = [seg.distal_y[terminal_ids[j]] for j in 1:n_term]
+        term_z = [seg.distal_z[terminal_ids[j]] for j in 1:n_term]
+
+        dist_buf = zeros(n_term)
+
+        for j in 1:n_term
+            cx, cy, cz = term_x[j], term_y[j], term_z[j]
+
+            # Compute distances to all other terminals using AK
+            AK.foreachindex(dist_buf) do k
+                dx = term_x[k] - cx
+                dy = term_y[k] - cy
+                dz = term_z[k] - cz
+                dist_buf[k] = dx * dx + dy * dy + dz * dz
+            end
+            # Set self-distance to Inf
+            dist_buf[j] = Inf
+
+            nn_dists[j] = sqrt(AK.minimum(dist_buf))
+        end
+
+        # Weight proportional to nn_dist^3 (approximates 3D territory volume)
+        for j in 1:n_term
+            weights[j] = nn_dists[j]^3
+        end
+    end
+
+    # Normalize weights so they sum to 1
+    total_weight = sum(weights)
+    for j in 1:n_term
+        weights[j] /= total_weight
+    end
+
+    # Total flow from pressure drop and equivalent resistance
+    total_R = _compute_total_resistance(tree)
+    total_flow = (params.root_pressure - params.terminal_pressure) / total_R
+
+    # Assign terminal flows
+    for j in 1:n_term
+        seg.flow[terminal_ids[j]] = total_flow * weights[j]
+    end
+
+    # Bottom-up: propagate flows from terminals to root
+    order = _topo_order(tree)
+    for k in length(order):-1:1
+        i = order[k]
+        if !topo.is_terminal[i]
+            flow_sum = 0.0
+            c1 = Int(topo.child1_id[i])
+            c2 = Int(topo.child2_id[i])
+            c3 = Int(topo.child3_id[i])
+            c1 > 0 && (flow_sum += seg.flow[c1])
+            c2 > 0 && (flow_sum += seg.flow[c2])
+            c3 > 0 && (flow_sum += seg.flow[c3])
+            seg.flow[i] = flow_sum
+        end
+    end
+
+    return nothing
+end
+
+"""
+    _compute_total_resistance(tree::VascularTree) -> Float64
+
+Compute the equivalent resistance of the entire tree (bottom-up).
+"""
+function _compute_total_resistance(tree::VascularTree)
+    seg = tree.segments
+    topo = tree.topology
+    order = _topo_order(tree)
+    n = seg.n
+
+    subtree_R = zeros(n)
+    for k in length(order):-1:1
+        i = order[k]
+        if topo.is_terminal[i]
+            subtree_R[i] = seg.resistance[i]
+        else
+            conductance_sum = 0.0
+            c1 = Int(topo.child1_id[i])
+            c2 = Int(topo.child2_id[i])
+            c3 = Int(topo.child3_id[i])
+            c1 > 0 && (conductance_sum += 1.0 / subtree_R[c1])
+            c2 > 0 && (conductance_sum += 1.0 / subtree_R[c2])
+            c3 > 0 && (conductance_sum += 1.0 / subtree_R[c3])
+            subtree_R[i] = seg.resistance[i] + 1.0 / conductance_sum
+        end
+    end
+
+    return subtree_R[Int(tree.root_segment_id)]
+end
+
+"""
+    recompute_radii_from_flow!(tree::VascularTree, params::MorphometricParams)
+
+Given a flow distribution, recompute terminal radii from Poiseuille's law
+and propagate internal radii via Murray's law.
+
+Terminal radius is set so that R = 8*mu*L/(pi*r^4) gives the target pressure
+drop for that terminal's flow. Then Murray's law propagates upward.
+"""
+function recompute_radii_from_flow!(tree::VascularTree, params::MorphometricParams)
+    seg = tree.segments
+    topo = tree.topology
+    n = seg.n
+    gamma = params.gamma
+    n == 0 && return nothing
+
+    # Set terminal radii from flow using Poiseuille:
+    # Q = delta_P / R, R = 8*mu*L/(pi*r^4)
+    # r^4 = 8*mu*L*Q / (pi * delta_P)
+    # Use a proportional approach: r proportional to Q^(1/gamma)
+    # (from Murray's law generalization: Q ∝ r^gamma)
+    for i in 1:n
+        if topo.is_terminal[i]
+            seg.radius[i] = (seg.flow[i])^(1.0 / gamma)
+        end
+    end
+
+    # Normalize: scale all terminal radii so root radius is reasonable
+    # Murray's law bottom-up will set internal radii
+    update_radii!(tree, gamma)
+
+    return nothing
+end

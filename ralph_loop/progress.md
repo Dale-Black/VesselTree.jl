@@ -229,3 +229,18 @@
   - Total flow = (P_root - P_term) / R_total_tree; pressures computed top-down as P_distal = P_proximal - Q*R
   - Poiseuille formula R = 8*mu*L/(pi*r^4) implemented as AK kernel; r^4 scaling means small radius changes have huge resistance effects
 - Next: VESSEL-1013 (Flow-weighted radius assignment)
+
+### 2026-03-05: VESSEL-1013 [PASS]
+- Attempted: Implement flow-weighted radius assignment with territory-based flow distribution
+- Result: 21 new tests pass (3492 total), P3 Hemodynamics milestone complete
+- Regression gate: 3492 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/hemodynamics.jl — assign_terminal_flows! (AK nn-distance for territory), recompute_radii_from_flow!, _compute_total_resistance
+  - test/test_hemodynamics.jl — 5 new testsets for flow-weighted assignment
+  - src/VesselTree.jl — new exports
+- Learning:
+  - Territory weight via nn_dist^3 gives reasonable volume proxy for 3D Voronoi-like territory
+  - Terminal radius proportional to Q^(1/gamma) from Murray's law generalization (Q ∝ r^gamma)
+  - AK.foreachindex used for pairwise terminal distance computation; AK.minimum for nn lookup
+  - Flow-weighted pipeline: assign_terminal_flows! → recompute_radii_from_flow! → compute_resistances! → compute_flows! → compute_pressures!
+- Next: VESSEL-1014 (Kassab: Strahler ordering + asymmetry sampling)

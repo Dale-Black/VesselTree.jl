@@ -300,6 +300,127 @@ using Random
         @test validate_hemodynamics(tree, params) == false
     end
 
+    # --- Flow-weighted radius assignment ---
+
+    @testset "assign_terminal_flows! — non-uniform flow" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(42)
+        grow_tree!(tree, domain, 20, params; rng=rng)
+
+        compute_resistances!(tree, mu)
+        assign_terminal_flows!(tree, domain, params)
+
+        seg = tree.segments
+        topo = tree.topology
+
+        # All terminal flows should be positive
+        terminal_flows = Float64[]
+        for i in 1:seg.n
+            if topo.is_terminal[i]
+                @test seg.flow[i] > 0.0
+                push!(terminal_flows, seg.flow[i])
+            end
+        end
+
+        # Flows should not all be identical (territory-weighted)
+        if length(terminal_flows) > 2
+            @test !all(f ≈ terminal_flows[1] for f in terminal_flows)
+        end
+    end
+
+    @testset "assign_terminal_flows! — total flow conservation" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(77)
+        grow_tree!(tree, domain, 30, params; rng=rng)
+
+        compute_resistances!(tree, mu)
+        assign_terminal_flows!(tree, domain, params)
+
+        seg = tree.segments
+        topo = tree.topology
+
+        # Sum of terminal flows should equal root flow
+        terminal_sum = 0.0
+        for i in 1:seg.n
+            if topo.is_terminal[i]
+                terminal_sum += seg.flow[i]
+            end
+        end
+        @test seg.flow[tree.root_segment_id] ≈ terminal_sum rtol = 1e-6
+    end
+
+    @testset "recompute_radii_from_flow! — Murray's law holds" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(88)
+        grow_tree!(tree, domain, 20, params; rng=rng)
+
+        compute_resistances!(tree, mu)
+        assign_terminal_flows!(tree, domain, params)
+        recompute_radii_from_flow!(tree, params)
+
+        seg = tree.segments
+        topo = tree.topology
+
+        # Murray's law: r_parent^gamma = r_c1^gamma + r_c2^gamma
+        for i in 1:seg.n
+            if topo.junction_type[i] == :bifurcation
+                c1 = topo.child1_id[i]
+                c2 = topo.child2_id[i]
+                if c1 > 0 && c2 > 0
+                    lhs = seg.radius[i]^gamma
+                    rhs = seg.radius[c1]^gamma + seg.radius[c2]^gamma
+                    @test lhs ≈ rhs rtol = 1e-6
+                end
+            end
+        end
+    end
+
+    @testset "recompute_radii_from_flow! — all radii positive" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(99)
+        grow_tree!(tree, domain, 20, params; rng=rng)
+
+        compute_resistances!(tree, mu)
+        assign_terminal_flows!(tree, domain, params)
+        recompute_radii_from_flow!(tree, params)
+
+        for i in 1:tree.segments.n
+            @test tree.segments.radius[i] > 0.0
+        end
+    end
+
+    @testset "Flow-weighted pipeline — validate_hemodynamics" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(111)
+        grow_tree!(tree, domain, 30, params; rng=rng)
+
+        compute_resistances!(tree, mu)
+        assign_terminal_flows!(tree, domain, params)
+        recompute_radii_from_flow!(tree, params)
+
+        # Recompute everything with new radii
+        compute_resistances!(tree, mu)
+        compute_flows!(tree, params)
+        compute_pressures!(tree, params)
+
+        @test validate_hemodynamics(tree, params) == true
+    end
+
     # --- Integration with CCO-grown trees ---
 
     @testset "Full pipeline on CCO tree — 50 terminals" begin
