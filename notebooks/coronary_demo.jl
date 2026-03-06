@@ -56,8 +56,24 @@ md"""
 Plot vessel segments with linewidth proportional to radius. Batches by discretized
 linewidth since CairoMakie needs uniform width per linesegments! call.
 """
+"""
+Plot vessel segments projected onto the two axes with the most spatial extent.
+Batches by discretized linewidth since CairoMakie needs uniform width per call.
+"""
 function plot_vessels!(ax, seg, n; color=:red, nbins=15, alpha=0.85)
 	n == 0 && return
+
+	# Pick the two axes with the most spatial extent for the projection
+	xr = extrema(seg.proximal_x[i] for i in 1:n)
+	yr = extrema(seg.proximal_y[i] for i in 1:n)
+	zr = extrema(seg.proximal_z[i] for i in 1:n)
+	spans = [(xr[2]-xr[1], :x), (yr[2]-yr[1], :y), (zr[2]-zr[1], :z)]
+	sort!(spans, by=first, rev=true)
+	ax1, ax2 = spans[1][2], spans[2][2]
+	getcoord(field, i) = field == :x ? (seg.proximal_x[i], seg.distal_x[i]) :
+	                     field == :y ? (seg.proximal_y[i], seg.distal_y[i]) :
+	                                   (seg.proximal_z[i], seg.distal_z[i])
+
 	raw_widths = [clamp(Float32(sqrt(seg.radius[i]) * 8), 0.3f0, 8.0f0) for i in 1:n]
 	wmin, wmax = extrema(raw_widths)
 	wmax == wmin && (wmax = wmin + 1f0)
@@ -71,8 +87,10 @@ function plot_vessels!(ax, seg, n; color=:red, nbins=15, alpha=0.85)
 		for i in 1:n
 			w = raw_widths[i]
 			if (b == nbins ? w >= lo : lo <= w < hi)
-				push!(pts, Point2f(seg.proximal_x[i], seg.proximal_y[i]))
-				push!(pts, Point2f(seg.distal_x[i], seg.distal_y[i]))
+				p1, d1 = getcoord(ax1, i)
+				p2, d2 = getcoord(ax2, i)
+				push!(pts, Point2f(p1, p2))
+				push!(pts, Point2f(d1, d2))
 			end
 		end
 		isempty(pts) && continue
@@ -82,17 +100,21 @@ end
 
 # ╔═╡ a2000001-b000-4c00-8d00-e00000000003
 begin
+	# Root: start at top of sphere, grow downward
+	root_pos = (0.0, 0.0, 50.0)
+	root_end = (0.0, 0.0, 42.5)  # 7.5mm root segment along -z
+
 	# Grow CCO skeleton at 3 stages
 	tree_10 = VascularTree("RCA", 5000)
-	VesselTree.add_segment!(tree_10, (0.0, 0.0, 50.0), (0.0, 0.0, 45.0), 1.5, Int32(-1))
+	add_segment!(tree_10, root_pos, root_end, 1.5, Int32(-1))
 	grow_tree!(tree_10, domain, 10, params_rca; rng=MersenneTwister(42))
 
 	tree_30 = VascularTree("RCA", 5000)
-	VesselTree.add_segment!(tree_30, (0.0, 0.0, 50.0), (0.0, 0.0, 45.0), 1.5, Int32(-1))
+	add_segment!(tree_30, root_pos, root_end, 1.5, Int32(-1))
 	grow_tree!(tree_30, domain, 30, params_rca; rng=MersenneTwister(42))
 
 	tree_100 = VascularTree("RCA", 5000)
-	VesselTree.add_segment!(tree_100, (0.0, 0.0, 50.0), (0.0, 0.0, 45.0), 1.5, Int32(-1))
+	add_segment!(tree_100, root_pos, root_end, 1.5, Int32(-1))
 	grow_tree!(tree_100, domain, 100, params_rca; rng=MersenneTwister(42))
 
 	md"CCO skeleton: **$(tree_10.segments.n)** -> **$(tree_30.segments.n)** -> **$(tree_100.segments.n)** segments"
@@ -109,7 +131,7 @@ begin
 	])
 		ax = Axis(fig_cco[1, idx],
 			title=label,
-			xlabel="x (mm)", ylabel="y (mm)",
+			xlabel="mm", ylabel="mm",
 			backgroundcolor=:grey10,
 			titlecolor=:white, xlabelcolor=:white, ylabelcolor=:white,
 			xticklabelcolor=:grey70, yticklabelcolor=:grey70,
@@ -129,7 +151,7 @@ The CCO skeleton captures spatial layout of major vessels. Now we subdivide each
 
 # ╔═╡ a2000003-b000-4c00-8d00-e00000000005
 begin
-	configs_full = [TreeConfig("RCA", (0.0, 0.0, 50.0), 1.5, (0.0, 0.0, -1.0), 100, 1.0)]
+	configs_full = [TreeConfig("RCA", root_pos, 1.5, (0.0, 0.0, -1.0), 100, 1.0)]
 	t_gen = @elapsed forest_full = generate_kassab_coronary(
 		domain, params_rca;
 		tree_configs=configs_full,
@@ -168,7 +190,7 @@ begin
 
 	ax_before = Axis(fig_compare[1, 1],
 		title="CCO Skeleton ($(tree_100.segments.n) segments)",
-		xlabel="x (mm)", ylabel="y (mm)",
+		xlabel="mm", ylabel="mm",
 		backgroundcolor=:grey10,
 		titlecolor=:white, xlabelcolor=:white, ylabelcolor=:white,
 		xticklabelcolor=:grey70, yticklabelcolor=:grey70,
@@ -177,7 +199,7 @@ begin
 
 	ax_after = Axis(fig_compare[1, 2],
 		title="After Subdivision ($(n_full) segments)",
-		xlabel="x (mm)", ylabel="y (mm)",
+		xlabel="mm", ylabel="mm",
 		backgroundcolor=:grey10,
 		titlecolor=:white, xlabelcolor=:white, ylabelcolor=:white,
 		xticklabelcolor=:grey70, yticklabelcolor=:grey70,
@@ -197,6 +219,18 @@ Visualize the full range from ~3mm stems (bright) down to capillaries (dark). Th
 # ╔═╡ a2000005-b000-4c00-8d00-e00000000007
 begin
 	seg_full = tree_full.segments
+
+	# Auto-select projection axes (two with most extent)
+	_xr = extrema(seg_full.proximal_x[i] for i in 1:n_full)
+	_yr = extrema(seg_full.proximal_y[i] for i in 1:n_full)
+	_zr = extrema(seg_full.proximal_z[i] for i in 1:n_full)
+	_spans = [(_xr[2]-_xr[1], :x), (_yr[2]-_yr[1], :y), (_zr[2]-_zr[1], :z)]
+	sort!(_spans, by=first, rev=true)
+	_ax1, _ax2 = _spans[1][2], _spans[2][2]
+	_get(field, i, prox) = field == :x ? (prox ? seg_full.proximal_x[i] : seg_full.distal_x[i]) :
+	                       field == :y ? (prox ? seg_full.proximal_y[i] : seg_full.distal_y[i]) :
+	                                     (prox ? seg_full.proximal_z[i] : seg_full.distal_z[i])
+
 	widths_full = [clamp(Float32(sqrt(seg_full.radius[i]) * 8), 0.2f0, 8.0f0) for i in 1:n_full]
 	colors_full = [log10(max(seg_full.radius[i] * 2000, 0.1)) for i in 1:n_full]
 	wmin_f, wmax_f = extrema(widths_full)
@@ -205,7 +239,7 @@ begin
 	fig_diam = Figure(size=(950, 700), backgroundcolor=:grey10)
 	ax_diam = Axis(fig_diam[1, 1],
 		title="RCA -- Vessel Diameter (log scale)",
-		xlabel="x (mm)", ylabel="y (mm)",
+		xlabel="mm", ylabel="mm",
 		backgroundcolor=:grey10,
 		titlecolor=:white, xlabelcolor=:white, ylabelcolor=:white,
 		xticklabelcolor=:grey70, yticklabelcolor=:grey70,
@@ -225,8 +259,8 @@ begin
 		for i in 1:n_full
 			w = widths_full[i]
 			if (b == nbins_d ? w >= lo : lo <= w < hi)
-				push!(pts, Point2f(seg_full.proximal_x[i], seg_full.proximal_y[i]))
-				push!(pts, Point2f(seg_full.distal_x[i], seg_full.distal_y[i]))
+				push!(pts, Point2f(_get(_ax1, i, true), _get(_ax2, i, true)))
+				push!(pts, Point2f(_get(_ax1, i, false), _get(_ax2, i, false)))
 				t = clamp((colors_full[i] - clo) / (chi - clo), 0, 1)
 				idx = clamp(round(Int, t * (length(cmap) - 1)) + 1, 1, length(cmap))
 				c = cmap[idx]
@@ -319,7 +353,7 @@ let
 	card = generate_report_card(tree_full, params_rca)
 	buf = IOBuffer()
 	print_report_card(buf, card)
-	Text(String(take!(buf)))
+	@info String(take!(buf))
 end
 
 # ╔═╡ Cell order:
