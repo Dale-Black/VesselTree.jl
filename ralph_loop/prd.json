@@ -9,7 +9,7 @@
     "science": "CCO growth + Kassab morphometry (gamma=7/3, asymmetry Beta(2.5,0.8)) + Barabasi surface optimization (chi/rho thresholds at 0.83)"
   },
   "milestones": {
-    "P0": { "name": "Discovery", "stories": 4, "done": 2 },
+    "P0": { "name": "Discovery", "stories": 4, "done": 3 },
     "P1": { "name": "Foundation", "stories": 3, "done": 0 },
     "P2": { "name": "CCO Engine", "stories": 5, "done": 0 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
@@ -63,7 +63,8 @@
       "id": "VESSEL-1002",
       "title": "DISCOVERY: Kassab 1993 morphometry data extraction",
       "type": "DISCOVERY",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Complete morphometric tables extracted: diameter/length by order 0-11 with SD, diameter boundary thresholds, approximate connectivity matrix, asymmetry distribution Beta(2.5,0.8), segment counts (~6M per artery), L/D ratios, branching angles, gamma=7/3 derivation summary. Validation criteria defined.",
       "priority": 0,
       "milestone": "P0",
       "blockedBy": [],

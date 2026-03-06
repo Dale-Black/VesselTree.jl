@@ -60,3 +60,20 @@
   - OpenCCO demonstrates up to 20K terminals; our target is 2M (100x more)
   - Length factor approach: scale distances rather than moving points (avoids O(k) coordinate updates)
 - Next: VESSEL-1002 (Kassab morphometry) or VESSEL-1003 (Barabasi surface optimization)
+
+### 2026-03-05: VESSEL-1002 [PASS]
+- Attempted: Extract and document all quantitative data from Kassab 1993 and related papers
+- Result: Complete morphometric reference compiled from Kassab 1993, Wischgoll 2009, Kaimovitz 2005/2010, Huo-Kassab 2007/2009/2012
+- Regression gate: N/A (discovery story, no source code)
+- Learning:
+  - 12 orders (0-11): capillaries (8um) to main stem (4500um)
+  - Diameter boundaries follow ~1.8x geometric progression
+  - Asymmetry ratio well-modeled by Beta(2.5, 0.8), median=0.76
+  - ~6M segments per major coronary artery; ~50% are terminals
+  - L/D ratio increases with order: 2.5 (capillary) to 33.3 (stem)
+  - Gamma = 7/3 from tree-level energy minimization (NOT single-bifurcation Murray)
+  - Angle distribution is bimodal (sprouting ~90 deg + branching ~45 deg)
+  - Connectivity matrix shows highly asymmetric branching at higher orders
+  - Human data more symmetric than porcine (median S=0.59 vs <0.40 for large vessels)
+  - Validation: KS test per order, Murray's law check, angle bimodality
+- Next: VESSEL-1003 (Barabasi surface optimization)
