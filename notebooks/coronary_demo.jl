@@ -228,9 +228,9 @@ begin
 		tellheight=false, tellwidth=false, halign=:right, valign=:top,
 		margin=(10, 10, 10, 10))
 
-	Label(fig_3d[2, 1],
-		"$(total_3d) total segments | $(n_vis) shown (> 30 um) | capillaries to 8 um in data",
-		color=:grey60, fontsize=12)
+	# Label(fig_3d[2, 1],
+	# 	"$(total_3d) total segments | $(n_vis) shown (> 30 um) | capillaries to 8 um in data",
+	# 	color=:grey60, fontsize=12)
 
 	fig_3d
 end
