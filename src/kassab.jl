@@ -262,3 +262,108 @@ function _find_nearest_valid_order(CM::Matrix{Float64}, parent_order::Int, curre
     end
     return current_order
 end
+
+"""
+    apply_full_kassab_radii!(tree, params; rng)
+
+Post-hoc Kassab radius refinement. Top-down asymmetry assignment with floor
+enforcement, followed by bottom-up Murray's law propagation.
+
+Unlike apply_kassab_radii!, this:
+- Handles trifurcations (3 daughters)
+- Enforces minimum radius floor (vessel_cutoff_um / 2 / 1000)
+- Uses subtree size to assign larger radius to continuation
+"""
+function apply_full_kassab_radii!(
+    tree::VascularTree,
+    params::MorphometricParams;
+    rng::AbstractRNG=Random.default_rng(),
+)
+    seg = tree.segments
+    topo = tree.topology
+    n = seg.n
+    gamma = params.gamma
+    min_radius = params.vessel_cutoff_um / 2.0 / 1000.0  # 8um diameter → 0.004mm radius
+
+    # Compute subtree sizes for each segment (sequential: BFS bottom-up)
+    order = _topo_order(tree)
+    subtree_size = ones(Int, n)
+    for k in length(order):-1:1
+        i = order[k]
+        c1 = Int(topo.child1_id[i])
+        c2 = Int(topo.child2_id[i])
+        c3 = Int(topo.child3_id[i])
+        c1 > 0 && (subtree_size[i] += subtree_size[c1])
+        c2 > 0 && (subtree_size[i] += subtree_size[c2])
+        c3 > 0 && (subtree_size[i] += subtree_size[c3])
+    end
+
+    # Top-down pass: assign asymmetric daughter radii
+    for k in 1:length(order)
+        i = order[k]
+
+        if topo.junction_type[i] == :bifurcation
+            c1 = Int(topo.child1_id[i])
+            c2 = Int(topo.child2_id[i])
+            (c1 <= 0 || c2 <= 0) && continue
+
+            asymmetry = sample_asymmetry(params, rng)
+            r_large, r_small = compute_daughter_radii(seg.radius[i], asymmetry, gamma)
+
+            # Floor enforcement
+            r_large = max(r_large, min_radius)
+            r_small = max(r_small, min_radius)
+
+            # Assign larger radius to larger subtree (continuation)
+            if subtree_size[c1] >= subtree_size[c2]
+                seg.radius[c1] = r_large
+                seg.radius[c2] = r_small
+            else
+                seg.radius[c1] = r_small
+                seg.radius[c2] = r_large
+            end
+
+        elseif topo.junction_type[i] == :trifurcation
+            c1 = Int(topo.child1_id[i])
+            c2 = Int(topo.child2_id[i])
+            c3 = Int(topo.child3_id[i])
+            (c1 <= 0 || c2 <= 0 || c3 <= 0) && continue
+
+            # Sample two asymmetry ratios for 3 daughters
+            # Split: r_parent^gamma = r1^gamma + r2^gamma + r3^gamma
+            # First split: r_parent into (r_large_pair, r3)
+            asym1 = sample_asymmetry(params, rng)
+            r_large_pair, r3 = compute_daughter_radii(seg.radius[i], asym1, gamma)
+
+            # Second split: r_large_pair into (r1, r2)
+            asym2 = sample_asymmetry(params, rng)
+            r1, r2 = compute_daughter_radii(r_large_pair, asym2, gamma)
+
+            # Floor enforcement
+            r1 = max(r1, min_radius)
+            r2 = max(r2, min_radius)
+            r3 = max(r3, min_radius)
+
+            # Sort by subtree size: largest subtree gets largest radius
+            children = [(c1, subtree_size[c1]), (c2, subtree_size[c2]), (c3, subtree_size[c3])]
+            sort!(children, by=x -> x[2], rev=true)
+            radii = sort([r1, r2, r3], rev=true)
+
+            seg.radius[children[1][1]] = radii[1]
+            seg.radius[children[2][1]] = radii[2]
+            seg.radius[children[3][1]] = radii[3]
+        end
+    end
+
+    # Bottom-up: enforce Murray's law from terminals up
+    update_radii!(tree, gamma)
+
+    # Final floor enforcement pass (in case Murray propagation pushed some below floor)
+    for i in 1:n
+        if seg.radius[i] < min_radius
+            seg.radius[i] = min_radius
+        end
+    end
+
+    return nothing
+end

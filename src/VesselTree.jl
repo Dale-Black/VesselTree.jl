@@ -51,7 +51,7 @@ export update_radii!, grow_tree!, add_bifurcation!
 export SpatialGrid, build_grid, query_nearby
 export compute_resistances!, compute_flows!, compute_pressures!, validate_hemodynamics
 export assign_terminal_flows!, recompute_radii_from_flow!
-export assign_strahler_orders!, sample_asymmetry, compute_daughter_radii, apply_kassab_radii!
+export assign_strahler_orders!, sample_asymmetry, compute_daughter_radii, apply_kassab_radii!, apply_full_kassab_radii!
 export build_empirical_connectivity, validate_connectivity, constrain_connectivity!
 export compute_chi, compute_rho, classify_junction, compute_junction_angles, apply_junction_geometry!
 export compute_trifurcation_angles, check_trifurcation_merge, merge_to_trifurcation!, apply_trifurcation_geometry!
