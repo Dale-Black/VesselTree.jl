@@ -144,6 +144,15 @@ function apply_junction_geometry!(tree::VascularTree, bifurc_idx::Int32, params:
     # Bifurcation point (distal of parent = proximal of children)
     bx, by, bz = dx, dy, dz
 
+    # Sync children's proximal points to the actual bifurcation point
+    # (parent's distal may have been moved by a previous geometry pass)
+    seg.proximal_x[large_id] = bx
+    seg.proximal_y[large_id] = by
+    seg.proximal_z[large_id] = bz
+    seg.proximal_x[small_id] = bx
+    seg.proximal_y[small_id] = by
+    seg.proximal_z[small_id] = bz
+
     # Rotate large daughter
     len_large = seg.seg_length[large_id]
     new_dx_l = parent_dx * cos(angle_large) + perp_x * sin(angle_large)
@@ -164,7 +173,7 @@ function apply_junction_geometry!(tree::VascularTree, bifurc_idx::Int32, params:
     seg.distal_y[small_id] = by + new_dy_s * len_small
     seg.distal_z[small_id] = bz + new_dz_s * len_small
 
-    # Recompute segment lengths (should be preserved, but recalculate for safety)
+    # Recompute segment lengths (preserved by construction, verified for safety)
     _update_seg_length!(seg, large_id)
     _update_seg_length!(seg, small_id)
 

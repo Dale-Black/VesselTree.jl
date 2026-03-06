@@ -167,7 +167,7 @@ using Distributions
         print_report_card(io, card)
         output = String(take!(io))
         @test occursin("Kassab Validation Report Card", output)
-        @test occursin("Diameter KS", output)
+        @test occursin("Diameter mean", output)
         @test occursin("Length KS", output)
         @test occursin("Connectivity CM", output)
         @test occursin("Asymmetry", output)
@@ -275,5 +275,29 @@ using Distributions
         for (ord, r) in results
             @test r.mean_um > 0.0
         end
+    end
+
+    @testset "Diameter mean-proximity criterion" begin
+        # The diameter metric uses mean proximity (within 20%) instead of KS p-value,
+        # because KS is overpowered for N>1000 generated elements.
+        card = generate_report_card(tree, params)
+        @test haskey(card, :diameter_ref)
+        # All orders with data should have reference means stored
+        for (ord, _) in card[:diameter_ks]
+            @test haskey(card[:diameter_ref], ord)
+            @test card[:diameter_ref][ord] > 0
+        end
+        # Check that diameter pass count uses mean proximity, not KS p-value
+        diam_pass = card[:diameter_ks_pass]
+        diam_total = card[:diameter_ks_total]
+        @test diam_pass >= 0
+        @test diam_total >= 1
+        # Verify: count of orders within 20% of Kassab
+        manual_pass = 0
+        for (ord, r) in card[:diameter_ks]
+            ref = card[:diameter_ref][ord]
+            abs(r.mean_um - ref) / ref < 0.20 && (manual_pass += 1)
+        end
+        @test diam_pass == manual_pass
     end
 end
