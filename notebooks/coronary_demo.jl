@@ -142,16 +142,16 @@ end
 md"""
 ## 3D Coronary Forest
 
-Three arteries (LAD, LCX, RCA) grown with different root directions. Each artery fills its own plane around the heart surface -- together they form a true 3D vascular network. Subdivision extends each to capillary scale (~8 um).
+Three arteries (LAD, LCX, RCA) with 500/300/400 CCO terminals, each subdivided to capillary scale. The plot filters to vessels > 30 um diameter for clarity -- capillaries exist in the data but are invisible at this zoom.
 """
 
 # ╔═╡ b3000002-c000-4d00-9e00-f00000000002
 begin
 	domain_3d = EllipsoidDomain((0.0, 0.0, 0.0), (50.0, 40.0, 35.0))
 	configs_3d = [
-		TreeConfig("LAD", (-5.0, 5.0, 30.0), 1.5, (1.0, -1.0, -1.0), 50, 0.40),
-		TreeConfig("LCX", (-5.0, -5.0, 30.0), 1.2, (1.0, 1.0, -1.0), 30, 0.25),
-		TreeConfig("RCA", (5.0, 0.0, 30.0), 1.3, (-1.0, 0.0, -1.0), 40, 0.35),
+		TreeConfig("LAD", (-5.0, 5.0, 30.0), 1.5, (1.0, -1.0, -1.0), 500, 0.40),
+		TreeConfig("LCX", (-5.0, -5.0, 30.0), 1.2, (1.0, 1.0, -1.0), 300, 0.25),
+		TreeConfig("RCA", (5.0, 0.0, 30.0), 1.3, (-1.0, 0.0, -1.0), 400, 0.35),
 	]
 	t_3d = @elapsed forest_3d = generate_kassab_coronary(
 		domain_3d, params_rca;
@@ -162,60 +162,144 @@ begin
 	total_3d = sum(t.segments.n for (_, t) in forest_3d.trees)
 
 	md"""
-	**3-artery forest:** $(total_3d) segments in $(round(t_3d, digits=1))s
+	**3-artery forest:** $(total_3d) total segments in $(round(t_3d, digits=1))s
 	"""
 end
 
 # ╔═╡ b3000003-c000-4d00-9e00-f00000000003
 begin
-	fig_3d = Figure(size=(1000, 800), backgroundcolor=:grey10)
-	ax3d = Axis3(fig_3d[1, 1],
-		title="Coronary Arterial Forest (3D)",
-		xlabel="x (mm)", ylabel="y (mm)", zlabel="z (mm)",
-		backgroundcolor=:grey10,
-		titlecolor=:white,
-		xlabelcolor=:white, ylabelcolor=:white, zlabelcolor=:white,
-		xticklabelcolor=:grey70, yticklabelcolor=:grey70, zticklabelcolor=:grey70,
-		azimuth=1.2, elevation=0.35,
-	)
+	# Helper: plot vessels in 3D, filtering by minimum diameter
+	function plot_vessels_3d!(ax, seg, n; color=:red, min_diam_um=30.0, nbins=15)
+		# Filter to visible vessels
+		vis = [i for i in 1:n if seg.radius[i] * 2000 >= min_diam_um]
+		isempty(vis) && return
 
-	artery_colors_3d = Dict("LAD" => :crimson, "LCX" => :dodgerblue, "RCA" => :limegreen)
-
-	for (name, tree) in forest_3d.trees
-		seg = tree.segments
-		n = tree.segments.n
-		col = artery_colors_3d[name]
-
-		raw_w = [clamp(Float32(sqrt(seg.radius[i]) * 8), 0.3f0, 6.0f0) for i in 1:n]
+		raw_w = [clamp(Float32(seg.radius[i] * 2000 / 50), 0.3f0, 8.0f0) for i in vis]
 		wmin, wmax = extrema(raw_w)
 		wmax == wmin && (wmax = wmin + 1f0)
 
-		for b in 1:12
-			lo = wmin + (b - 1) * (wmax - wmin) / 12
-			hi = wmin + b * (wmax - wmin) / 12
+		for b in 1:nbins
+			lo = wmin + (b - 1) * (wmax - wmin) / nbins
+			hi = wmin + b * (wmax - wmin) / nbins
 			bw = (lo + hi) / 2
 
 			pts = Point3f[]
-			for i in 1:n
-				w = raw_w[i]
-				if (b == 12 ? w >= lo : lo <= w < hi)
+			for k in eachindex(vis)
+				w = raw_w[k]
+				if (b == nbins ? w >= lo : lo <= w < hi)
+					i = vis[k]
 					push!(pts, Point3f(seg.proximal_x[i], seg.proximal_y[i], seg.proximal_z[i]))
 					push!(pts, Point3f(seg.distal_x[i], seg.distal_y[i], seg.distal_z[i]))
 				end
 			end
 			isempty(pts) && continue
-			linesegments!(ax3d, pts; linewidth=bw, color=(col, 0.8))
+			alpha = clamp(0.3 + 0.6 * (bw - wmin) / (wmax - wmin), 0.3, 0.95)
+			linesegments!(ax, pts; linewidth=bw, color=(color, alpha))
 		end
 	end
 
+	fig_3d = Figure(size=(1100, 850), backgroundcolor=:grey10)
+	ax3d = Axis3(fig_3d[1, 1],
+		title="Coronary Arterial Forest",
+		xlabel="x (mm)", ylabel="y (mm)", zlabel="z (mm)",
+		backgroundcolor=:grey10,
+		titlecolor=:white,
+		xlabelcolor=:white, ylabelcolor=:white, zlabelcolor=:white,
+		xticklabelcolor=:grey70, yticklabelcolor=:grey70, zticklabelcolor=:grey70,
+		azimuth=1.3, elevation=0.3,
+	)
+
+	artery_colors_3d = Dict("LAD" => :crimson, "LCX" => :dodgerblue, "RCA" => :limegreen)
+	for name in ["RCA", "LCX", "LAD"]
+		tree = forest_3d.trees[name]
+		plot_vessels_3d!(ax3d, tree.segments, tree.segments.n;
+			color=artery_colors_3d[name], min_diam_um=30.0)
+	end
+
+	n_vis = sum(
+		count(i -> forest_3d.trees[nm].segments.radius[i] * 2000 >= 30, 1:forest_3d.trees[nm].segments.n)
+		for nm in ["LAD", "LCX", "RCA"]
+	)
+
 	Legend(fig_3d[1, 2],
 		[LineElement(color=c, linewidth=3) for c in [:crimson, :dodgerblue, :limegreen]],
-		["LAD ($(forest_3d.trees["LAD"].segments.n))",
-		 "LCX ($(forest_3d.trees["LCX"].segments.n))",
-		 "RCA ($(forest_3d.trees["RCA"].segments.n))"],
-		labelcolor=:white, framecolor=:grey40, backgroundcolor=:grey20)
+		["LAD", "LCX", "RCA"],
+		labelcolor=:white, framecolor=:grey40, backgroundcolor=:grey20,
+		tellheight=false, tellwidth=false, halign=:right, valign=:top,
+		margin=(10, 10, 10, 10))
+
+	Label(fig_3d[2, 1],
+		"$(total_3d) total segments | $(n_vis) shown (> 30 um) | capillaries to 8 um in data",
+		color=:grey60, fontsize=12)
 
 	fig_3d
+end
+
+# ╔═╡ b3000004-c000-4d00-9e00-f00000000004
+md"""
+## 2D Projections — Per Artery
+
+Each artery naturally fills a plane around the heart. These 2D projections show the branching structure more clearly.
+"""
+
+# ╔═╡ b3000005-c000-4d00-9e00-f00000000005
+begin
+	fig_2d = Figure(size=(1400, 450), backgroundcolor=:grey10)
+
+	for (idx, name) in enumerate(["LAD", "LCX", "RCA"])
+		tree_a = forest_3d.trees[name]
+		seg_a = tree_a.segments
+		n_a = tree_a.segments.n
+		col = artery_colors_3d[name]
+
+		ax_a = Axis(fig_2d[1, idx],
+			title="$(name) ($(n_a) segments)",
+			xlabel="mm", ylabel="mm",
+			backgroundcolor=:grey10,
+			titlecolor=:white, xlabelcolor=:white, ylabelcolor=:white,
+			xticklabelcolor=:grey70, yticklabelcolor=:grey70,
+			aspect=DataAspect())
+
+		# Filter and auto-project
+		vis = [i for i in 1:n_a if seg_a.radius[i] * 2000 >= 20.0]
+		isempty(vis) && continue
+
+		# Pick best 2 axes
+		xr = extrema(seg_a.proximal_x[i] for i in vis)
+		yr = extrema(seg_a.proximal_y[i] for i in vis)
+		zr = extrema(seg_a.proximal_z[i] for i in vis)
+		spans = [(xr[2]-xr[1], :x), (yr[2]-yr[1], :y), (zr[2]-zr[1], :z)]
+		sort!(spans, by=first, rev=true)
+		a1, a2 = spans[1][2], spans[2][2]
+		gc(field, i, prox) = field == :x ? (prox ? seg_a.proximal_x[i] : seg_a.distal_x[i]) :
+		                     field == :y ? (prox ? seg_a.proximal_y[i] : seg_a.distal_y[i]) :
+		                                   (prox ? seg_a.proximal_z[i] : seg_a.distal_z[i])
+
+		raw_w = [clamp(Float32(seg_a.radius[i] * 2000 / 50), 0.3f0, 6.0f0) for i in vis]
+		wmin, wmax = extrema(raw_w)
+		wmax == wmin && (wmax = wmin + 1f0)
+
+		for b in 1:15
+			lo = wmin + (b - 1) * (wmax - wmin) / 15
+			hi = wmin + b * (wmax - wmin) / 15
+			bw = (lo + hi) / 2
+
+			pts = Point2f[]
+			for k in eachindex(vis)
+				w = raw_w[k]
+				if (b == 15 ? w >= lo : lo <= w < hi)
+					i = vis[k]
+					push!(pts, Point2f(gc(a1, i, true), gc(a2, i, true)))
+					push!(pts, Point2f(gc(a1, i, false), gc(a2, i, false)))
+				end
+			end
+			isempty(pts) && continue
+			alpha = clamp(0.4 + 0.5 * (bw - wmin) / (wmax - wmin), 0.4, 0.95)
+			linesegments!(ax_a, pts; linewidth=bw, color=(col, alpha))
+		end
+	end
+
+	fig_2d
 end
 
 # ╔═╡ cbca48e2-3fbb-4b6e-9f87-2998578795f1
@@ -227,7 +311,7 @@ The CCO skeleton captures spatial layout of major vessels. Now we subdivide each
 
 # ╔═╡ a2000003-b000-4c00-8d00-e00000000005
 begin
-	configs_full = [TreeConfig("RCA", root_pos, 1.5, (0.0, 0.0, -1.0), 100, 1.0)]
+	configs_full = [TreeConfig("RCA", root_pos, 1.5, (0.0, 0.0, -1.0), 300, 1.0)]
 	t_gen = @elapsed forest_full = generate_kassab_coronary(
 		domain, params_rca;
 		tree_configs=configs_full,
@@ -447,6 +531,8 @@ end
 # ╟─b3000001-c000-4d00-9e00-f00000000001
 # ╠═b3000002-c000-4d00-9e00-f00000000002
 # ╟─b3000003-c000-4d00-9e00-f00000000003
+# ╟─b3000004-c000-4d00-9e00-f00000000004
+# ╟─b3000005-c000-4d00-9e00-f00000000005
 # ╟─cbca48e2-3fbb-4b6e-9f87-2998578795f1
 # ╠═a2000003-b000-4c00-8d00-e00000000005
 # ╟─4200ca7d-d92a-44e3-a145-e4689c1d0435
