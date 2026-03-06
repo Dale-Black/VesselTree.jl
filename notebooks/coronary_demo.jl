@@ -56,10 +56,6 @@ md"""
 Plot vessel segments with linewidth proportional to radius. Batches by discretized
 linewidth since CairoMakie needs uniform width per linesegments! call.
 """
-"""
-Plot vessel segments projected onto the two axes with the most spatial extent.
-Batches by discretized linewidth since CairoMakie needs uniform width per call.
-"""
 function plot_vessels!(ax, seg, n; color=:red, nbins=15, alpha=0.85)
 	n == 0 && return
 
@@ -140,6 +136,86 @@ begin
 	end
 
 	fig_cco
+end
+
+# ╔═╡ b3000001-c000-4d00-9e00-f00000000001
+md"""
+## 3D Coronary Forest
+
+Three arteries (LAD, LCX, RCA) grown with different root directions. Each artery fills its own plane around the heart surface -- together they form a true 3D vascular network. Subdivision extends each to capillary scale (~8 um).
+"""
+
+# ╔═╡ b3000002-c000-4d00-9e00-f00000000002
+begin
+	domain_3d = EllipsoidDomain((0.0, 0.0, 0.0), (50.0, 40.0, 35.0))
+	configs_3d = [
+		TreeConfig("LAD", (-5.0, 5.0, 30.0), 1.5, (1.0, -1.0, -1.0), 50, 0.40),
+		TreeConfig("LCX", (-5.0, -5.0, 30.0), 1.2, (1.0, 1.0, -1.0), 30, 0.25),
+		TreeConfig("RCA", (5.0, 0.0, 30.0), 1.3, (-1.0, 0.0, -1.0), 40, 0.35),
+	]
+	t_3d = @elapsed forest_3d = generate_kassab_coronary(
+		domain_3d, params_rca;
+		tree_configs=configs_3d,
+		rng=MersenneTwister(42),
+		verbose=false,
+	)
+	total_3d = sum(t.segments.n for (_, t) in forest_3d.trees)
+
+	md"""
+	**3-artery forest:** $(total_3d) segments in $(round(t_3d, digits=1))s
+	"""
+end
+
+# ╔═╡ b3000003-c000-4d00-9e00-f00000000003
+begin
+	fig_3d = Figure(size=(1000, 800), backgroundcolor=:grey10)
+	ax3d = Axis3(fig_3d[1, 1],
+		title="Coronary Arterial Forest (3D)",
+		xlabel="x (mm)", ylabel="y (mm)", zlabel="z (mm)",
+		backgroundcolor=:grey10,
+		titlecolor=:white,
+		xlabelcolor=:white, ylabelcolor=:white, zlabelcolor=:white,
+		xticklabelcolor=:grey70, yticklabelcolor=:grey70, zticklabelcolor=:grey70,
+		azimuth=1.2, elevation=0.35,
+	)
+
+	artery_colors_3d = Dict("LAD" => :crimson, "LCX" => :dodgerblue, "RCA" => :limegreen)
+
+	for (name, tree) in forest_3d.trees
+		seg = tree.segments
+		n = tree.segments.n
+		col = artery_colors_3d[name]
+
+		raw_w = [clamp(Float32(sqrt(seg.radius[i]) * 8), 0.3f0, 6.0f0) for i in 1:n]
+		wmin, wmax = extrema(raw_w)
+		wmax == wmin && (wmax = wmin + 1f0)
+
+		for b in 1:12
+			lo = wmin + (b - 1) * (wmax - wmin) / 12
+			hi = wmin + b * (wmax - wmin) / 12
+			bw = (lo + hi) / 2
+
+			pts = Point3f[]
+			for i in 1:n
+				w = raw_w[i]
+				if (b == 12 ? w >= lo : lo <= w < hi)
+					push!(pts, Point3f(seg.proximal_x[i], seg.proximal_y[i], seg.proximal_z[i]))
+					push!(pts, Point3f(seg.distal_x[i], seg.distal_y[i], seg.distal_z[i]))
+				end
+			end
+			isempty(pts) && continue
+			linesegments!(ax3d, pts; linewidth=bw, color=(col, 0.8))
+		end
+	end
+
+	Legend(fig_3d[1, 2],
+		[LineElement(color=c, linewidth=3) for c in [:crimson, :dodgerblue, :limegreen]],
+		["LAD ($(forest_3d.trees["LAD"].segments.n))",
+		 "LCX ($(forest_3d.trees["LCX"].segments.n))",
+		 "RCA ($(forest_3d.trees["RCA"].segments.n))"],
+		labelcolor=:white, framecolor=:grey40, backgroundcolor=:grey20)
+
+	fig_3d
 end
 
 # ╔═╡ cbca48e2-3fbb-4b6e-9f87-2998578795f1
@@ -368,6 +444,9 @@ end
 # ╠═3c536f7a-9713-40f5-bac9-645cb3998d1a
 # ╠═a2000001-b000-4c00-8d00-e00000000003
 # ╟─a2000002-b000-4c00-8d00-e00000000004
+# ╟─b3000001-c000-4d00-9e00-f00000000001
+# ╠═b3000002-c000-4d00-9e00-f00000000002
+# ╟─b3000003-c000-4d00-9e00-f00000000003
 # ╟─cbca48e2-3fbb-4b6e-9f87-2998578795f1
 # ╠═a2000003-b000-4c00-8d00-e00000000005
 # ╟─4200ca7d-d92a-44e3-a145-e4689c1d0435
