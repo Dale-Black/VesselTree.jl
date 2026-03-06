@@ -224,11 +224,32 @@ Length/Diameter ratio:         16.8 (Kassab 1993)
 ## Key References
 
 1. **Schreiner & Buxbaum 1993** — CCO algorithm (IEEE Trans Biomed Eng)
-2. **Kassab et al. 1993** — Coronary morphometry (Am J Physiol Heart)
-3. **Huo & Kassab 2007** — gamma = 7/3 derivation (Biophys J)
-4. **Barabasi et al. 2026** — Surface optimization (Nature 649:315-322)
-5. **OpenCCO** — https://github.com/OpenCCO-team/OpenCCO (C++ reference)
-6. **min-surf-netw** — https://github.com/Barabasi-Lab/min-surf-netw (Python reference)
+2. **Kassab et al. 1993** — Coronary morphometry (Am J Physiol Heart 265:H350-H365)
+3. **Jiang et al. 1994** — Diameter-defined Strahler system (J Appl Physiol 76:882-892)
+4. **Kassab & Fung 1995** — Arteriolar bifurcation + Murray's law (Ann Biomed Eng 23:13-20)
+5. **Huo & Kassab 2007** — gamma = 7/3 derivation (Biophys J)
+6. **Huo & Kassab 2009** — Vascular volume scaling law (Biophys J 96:347-353)
+7. **Barabasi et al. 2026** — Surface optimization (Nature 649:315-322)
+8. **OpenCCO** — https://github.com/OpenCCO-team/OpenCCO (C++ reference)
+9. **min-surf-netw** — https://github.com/Barabasi-Lab/min-surf-netw (Python reference)
+
+### Paper PDFs (local)
+All papers are available as PDFs for direct reading:
+```
+/Users/daleblack/Documents/vessel tree growing papers/
+  kassab-et-al-1993-morphometry-of-pig-coronary-arterial-trees.pdf
+  jiang-et-al-1994-diameter-defined-strahler-system-and-connectivity-matrix-of-the-pulmonary-arterial-tree.pdf
+  BF02368296.pdf  (Kassab & Fung 1995)
+  main.pdf         (Huo & Kassab 2009)
+```
+
+### Research Notes (extracted data)
+```
+ralph_loop/research/
+  kassab_1993_real_data.md    — All tables from Kassab 1993 (needs PDF verification)
+  jiang_1994_methodology.md   — Diameter-defined Strahler algorithm
+  kassab_parity_gaps.md        — Gap analysis: what's wrong and how to fix it
+```
 
 ## Checkpoint Discipline
 
@@ -239,6 +260,51 @@ Commit after:
 - BEFORE running long commands
 
 Never lose more than 15 minutes of work to a timeout.
+
+## P9: Kassab-Scale Realism — The Critical Milestone
+
+P9 stories (VESSEL-1028 through VESSEL-1033, priority 7) run BEFORE P8 (Export, priority 8).
+
+**THE CORE ALGORITHM — Hybrid CCO + Statistical Subdivision:**
+
+Growing millions of capillaries one-at-a-time with CCO is O(n²) and would take weeks. Instead:
+
+1. **CCO skeleton** (~30s): Grow 500-2000 terminals per artery at upper Strahler orders (5-11) using grid-accelerated nearest-neighbor search. This produces the realistic spatial layout of major vessels with proper intersection checking.
+
+2. **Statistical subdivision** (~2 min): For each CCO terminal of order k, recursively generate daughters using Kassab's connectivity matrix CM[m+1, k+1]. Each daughter order m gets diameter ~ N(mean_m, sd_m), length ~ N(mean_m, sd_m). NO intersection checking — just tree construction. This multiplies ~1500 skeleton segments into ~2M+ per artery.
+
+3. **Post-hoc refinement** (~30s): Apply Kassab asymmetry radii top-down. Apply Barabasi junction geometry. Enforce Murray's law bottom-up.
+
+**Why this works**: The connectivity matrix IS the Kassab morphometric model. It directly encodes how many daughters of each order every parent has. Combined with per-order diameter/length distributions, it statistically reproduces the full tree without physics-based growth at capillary scale.
+
+**Target**: 3 arteries × ~2M segments = ~6M total segments in < 5 minutes.
+
+## P10: Exact Kassab Parity — The Current Priority
+
+P9 achieved the basic pipeline (CCO + subdivision + refinement) but validation shows only 2/6 metrics pass. P10 fixes this with REAL data and correct methodology.
+
+**Root causes of P9 failures (documented in ralph_loop/research/kassab_parity_gaps.md):**
+1. **Fabricated CM values** — parameters.jl has made-up numbers, not real Kassab Tables 6-8
+2. **Wrong Strahler method** — simple diameter binning instead of iterative Jiang 1994 algorithm
+3. **No element grouping** — Kassab operates on elements, not segments
+4. **Cascade stubs inflate trifurcation rate** — 44% vs target 8.3%
+5. **Post-hoc asymmetry gets destroyed** — Murray propagation + floor clamp
+6. **Wrong diameter/length data** — fabricated instead of real Tables 1-3
+7. **Single CM for all arteries** — RCA/LAD/LCX have different CMs
+
+**P10 stories (VESSEL-1034 through VESSEL-1043) fix ALL of these:**
+1. Verify real data from PDFs (VESSEL-1034)
+2. Replace fabricated CM + add per-artery params (VESSEL-1035)
+3. Implement correct Strahler ordering (VESSEL-1036)
+4. Implement element grouping (VESSEL-1037)
+5. Fix subdivision to produce clean bifurcation trees (VESSEL-1038)
+6. Fix asymmetry distribution (VESSEL-1039)
+7. Update validation to element-level (VESSEL-1040)
+8. Update pipeline with new params (VESSEL-1041)
+9. Verify >= 7/9 metrics pass (VESSEL-1042)
+10. Polish to >= 8/9 (VESSEL-1043)
+
+**Target**: >= 8/9 validation metrics pass for all three arteries (RCA, LAD, LCX), using exclusively real published data with zero fabrication.
 
 ## Output Markers
 

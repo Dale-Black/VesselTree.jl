@@ -1,7 +1,7 @@
 {
   "project": "VesselTree.jl — Physiologically Accurate Vascular Tree Generator",
-  "version": "1.0.0",
-  "updated": "2026-03-05",
+  "version": "2.0.0",
+  "updated": "2026-03-06",
   "goal": "Generate vascular trees from large arteries (3-5mm) to capillaries (8um) using CCO + Kassab morphometry + Barabasi surface optimization. ALL computational kernels use AcceleratedKernels.jl for native CPU/GPU performance. General-purpose (coronary, cerebral, pulmonary) with coronary as initial target.",
   "architecture": {
     "compute": "AcceleratedKernels.jl for ALL parallel kernels. No plain for-loops on segment arrays.",
@@ -18,7 +18,8 @@
     "P6": { "name": "Validation", "stories": 2, "done": 2 },
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 2 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 4 },
-    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 6 }
+    "P9": { "name": "Kassab-Scale Realism", "stories": 6, "done": 6 },
+    "P10": { "name": "Exact Kassab Parity", "stories": 10, "done": 1 }
   },
   "stories": [
 
@@ -692,6 +693,214 @@
         "No unnecessary allocations in hot paths (verified by profiling)",
         "AK used for all bulk array operations",
         "All existing tests still pass"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1034",
+      "title": "DISCOVERY: Extract and verify all real Kassab 1993 data from PDF",
+      "type": "DISCOVERY",
+      "status": "done",
+      "completedNote": "All 4 PDFs read page-by-page. CRITICAL FINDING: kassab_1993_real_data.md had WRONG diameter/length/count values (Tables 1-5, 9). CMs (Tables 6-8) were correct. Created kassab_verified_data.md with all numbers triple-checked against PDF pages. Asymmetry Beta(2.5,0.8) is UNCITED — not in Kassab 1993 or Kassab & Fung 1995. Jiang 1994 Eq 3A/3B verified. Kassab & Fung 1995 validates gamma=3 for arterioles (gamma=7/3 is for whole tree from Huo-Kassab 2007). Huo & Kassab 2009 volume scaling with exponent 2/3 validated.",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": [],
+      "description": "Read the actual Kassab 1993 PDF and verify/correct all data in ralph_loop/research/kassab_1993_real_data.md.\n\nPDFs available at:\n- /Users/daleblack/Documents/vessel tree growing papers/kassab-et-al-1993-morphometry-of-pig-coronary-arterial-trees.pdf\n- /Users/daleblack/Documents/vessel tree growing papers/jiang-et-al-1994-diameter-defined-strahler-system-and-connectivity-matrix-of-the-pulmonary-arterial-tree.pdf\n- /Users/daleblack/Documents/vessel tree growing papers/BF02368296.pdf (Kassab & Fung 1995 — arteriolar bifurcation pattern + Murray's law validation)\n- /Users/daleblack/Documents/vessel tree growing papers/main.pdf (Huo & Kassab 2009 — vascular volume scaling law)\n\nExisting research notes are in ralph_loop/research/kassab_1993_real_data.md and ralph_loop/research/jiang_1994_methodology.md. These were extracted from a prior conversation and need page-by-page verification against the actual PDFs.\n\nTasks:\n1. Read Kassab 1993 PDF Tables 1-9 page by page. Cross-check every number against kassab_1993_real_data.md. Fix any errors.\n2. Read Jiang 1994 PDF. Verify the diameter-defined Strahler algorithm description. Confirm Eq 3A/3B.\n3. Read Kassab & Fung 1995 — extract Murray's law exponent validation data (gamma=3 vs 7/3 at arteriolar scale).\n4. Read Huo & Kassab 2009 — extract volume scaling relations relevant to our tree generation.\n5. Document the asymmetry ratio source: which paper, which table, what distribution? Beta(2.5, 0.8) needs a citation.\n6. Create a final verified data file: ralph_loop/research/kassab_verified_data.md with all numbers triple-checked.\n\nCRITICAL: Every number that goes into parameters.jl must trace back to a specific table and page number in a specific paper. No fabricated or approximate values allowed.\n\nOutput: Updated ralph_loop/research/ files. Do NOT modify src/ or test/.",
+      "acceptanceCriteria": [
+        "All Tables 1-9 from Kassab 1993 verified against PDF (page numbers cited)",
+        "All three CMs (Tables 6-8) verified entry by entry",
+        "Jiang 1994 Eq 3A/3B verified",
+        "Asymmetry distribution source identified and cited",
+        "kassab_verified_data.md created with page/table citations for every number",
+        "No source code changes"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1035",
+      "title": "Replace fabricated CM with real Kassab Tables 6-8 + per-artery params",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": ["VESSEL-1034"],
+      "description": "Replace the fabricated connectivity matrix in parameters.jl with the REAL data from Kassab 1993 Tables 6 (RCA), 7 (LAD), 8 (LCX).\n\nChanges to parameters.jl:\n1. Add kassab_rca_params() with RCA-specific CM (Table 6), diameters/lengths (Table 1 RCA), 11 orders\n2. Add kassab_lad_params() with LAD-specific CM (Table 7), diameters/lengths (Table 2 LAD), 11 orders\n3. Add kassab_lcx_params() with LCX-specific CM (Table 8), diameters/lengths (Table 3 LCX), 10 orders\n4. Keep kassab_coronary_params() as alias for kassab_rca_params() for backward compatibility\n5. Use REAL diameter/length mean and SD from Kassab Tables 1-3 (SEGMENT-level values for subdivision, ELEMENT-level values stored separately for validation)\n6. Store element-level diameter_mean_elem, diameter_sd_elem, length_mean_elem, length_sd_elem as additional fields in MorphometricParams\n7. Store S/E ratios (Table 5) in MorphometricParams\n8. Store element count targets (Table 9) in MorphometricParams for validation\n\nMorphometricParams struct changes:\n- Add diameter_mean_elem, diameter_sd_elem (element-level)\n- Add length_mean_elem, length_sd_elem (element-level)\n- Add se_ratio::Vector{Float64} (segments per element)\n- Add element_count_target::Vector{Float64} (target element counts for validation)\n- Add artery_name::String (for identification)\n\nUpdate coronary_tree_configs in forest.jl to use artery-specific params.\n\nAll existing tests must still pass (kassab_coronary_params() returns RCA params as before).\n\nReference: ralph_loop/research/kassab_verified_data.md",
+      "acceptanceCriteria": [
+        "kassab_rca_params() returns params with real Table 6 CM",
+        "kassab_lad_params() returns params with real Table 7 CM",
+        "kassab_lcx_params() returns params with real Table 8 CM (10 orders)",
+        "kassab_coronary_params() still works (backward compat)",
+        "All CM entries traceable to Kassab 1993 table/page",
+        "Diameter/length data from real Tables 1-3 (segment-level AND element-level)",
+        "S/E ratios from Table 5 stored in params",
+        "coronary_tree_configs uses artery-specific params",
+        "All existing tests pass",
+        "At least 15 new tests verifying CM values, column sums, artery-specific params"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1036",
+      "title": "Implement diameter-defined Strahler ordering (Jiang 1994)",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": ["VESSEL-1035"],
+      "description": "Implement the CORRECT Kassab/Jiang diameter-defined Strahler ordering algorithm.\n\nNew function: assign_diameter_defined_strahler!(tree, params; max_iter=20)\n\nAlgorithm (from Jiang 1994, Eq 3A/3B):\n1. Start with conventional topological Strahler ordering:\n   - Terminals get order 1\n   - At junction: if both daughters same order n, parent = n+1; else parent = max(daughters)\n2. Compute per-order mean diameter D_n and SD_n from current assignments\n3. Compute diameter bounds:\n   - Lower: D'_1(n) = [(D_{n-1} + SD_{n-1}) + (D_n - SD_n)] / 2\n   - Upper: D'_2(n) = [(D_n + SD_n) + (D_{n+1} - SD_{n+1})] / 2\n   - D'_1(1) = 0, D'_2(max_order) = Inf\n4. Reassign each vessel to the order whose range contains its diameter\n5. Count changes. If < 1% changed, converge. Else go to step 2.\n\nReplace current assign_strahler_orders! (which is simple diameter binning) with this iterative method.\n\nKeep the old function as assign_strahler_orders_simple! for backward compatibility and testing.\n\nReference: ralph_loop/research/jiang_1994_methodology.md\nPDF: /Users/daleblack/Documents/vessel tree growing papers/jiang-et-al-1994-diameter-defined-strahler-system-and-connectivity-matrix-of-the-pulmonary-arterial-tree.pdf",
+      "acceptanceCriteria": [
+        "assign_diameter_defined_strahler! converges in <= 20 iterations",
+        "Convergence criterion: < 1% of vessels change order",
+        "Produces same number of orders as Kassab (11 for RCA/LAD, 10 for LCX)",
+        "Per-order diameter means are within 10% of Kassab Table 1-3 values",
+        "Diameter bounds are non-overlapping",
+        "Old assign_strahler_orders! preserved as assign_strahler_orders_simple!",
+        "Works on trees with > 100K segments",
+        "At least 10 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1037",
+      "title": "Implement element grouping and element-level statistics",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": ["VESSEL-1036"],
+      "description": "Implement the concept of 'elements' (series of same-order segments) that Kassab uses as the fundamental unit for connectivity matrix and morphometric statistics.\n\nNew types/functions:\n1. ElementData struct: element_id, order, segment_ids (Vector{Int}), mean_diameter, total_length, parent_element_id, child_element_ids\n2. group_into_elements(tree, params) -> Vector{ElementData}: Walk tree, identify runs of consecutive same-order segments, group them into elements\n3. build_element_connectivity(elements) -> Matrix{Float64}: Build CM from elements (the CORRECT way)\n4. compute_element_statistics(elements) -> per-order diameter/length means and SDs\n5. compute_se_ratios(tree, elements) -> S/E ratio per order\n\nThe element grouping logic:\n- Start from each terminal, walk toward root\n- A 'run' continues while the next segment has the same Strahler order\n- When the order changes, that's an element boundary\n- Element diameter = mean of segment diameters in the run\n- Element length = sum of segment lengths in the run\n- Element's parent = the element containing the parent segment of this run's first segment\n\nThis is the foundation for correct CM computation and validation.",
+      "acceptanceCriteria": [
+        "group_into_elements correctly identifies element boundaries",
+        "Element diameter = mean of constituent segment diameters",
+        "Element length = sum of constituent segment lengths",
+        "S/E ratios match Kassab Table 5 within 20% for most orders",
+        "build_element_connectivity produces correct CM format",
+        "Works on trees with > 100K segments",
+        "At least 12 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1038",
+      "title": "Fix subdivision to produce correct bifurcation-only trees",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": ["VESSEL-1035"],
+      "description": "Fix the subdivision engine to produce clean bifurcation trees without cascade stubs, matching Kassab's tree structure.\n\nProblems to fix:\n1. CASCADE STUBS: When Poisson gives >2 daughters, current code creates tiny 'cascade stub' segments to provide extra child slots. These appear as trifurcations (3+ children) and pollute trifurcation statistics (44% vs target 8.3%).\n\n2. DAUGHTER ASSIGNMENT: Current code assigns ALL Poisson-sampled daughters to a single parent. In Kassab's model, the CM describes daughters of ELEMENTS, not segments. An element may contain multiple segments, each with its own bifurcation.\n\nFix approach — bifurcation chain:\n- When CM says order-5 parent has 3 order-3 daughters, create a chain of 2 bifurcations:\n  - Parent bifurcates into (continuation of order 5, daughter of order 3)\n  - Continuation bifurcates into (continuation of order 5, daughter of order 3)\n  - Continuation bifurcates into (final daughter of order 3, another daughter)\n- Each bifurcation node has exactly 2 children\n- The 'continuation' segments maintain the parent's order and form the parent element\n- This naturally produces the S/E ratio (multiple segments per element)\n\nAlso fix:\n3. Use REAL per-order diameter/length distributions from new params (VESSEL-1035)\n4. Bake asymmetry into subdivision: at each bifurcation, r_large is the continuation, r_small is the branch. Use Murray's law to compute radii from parent + asymmetry ratio.\n5. Remove post-hoc apply_full_kassab_radii! — radii should be correct from subdivision.\n6. Remove hard floor clamp at 8um — use distribution-based sampling with truncation at vessel_cutoff_um.\n\nTarget: 100% bifurcations from subdivision. Only allow trifurcations from explicit Barabasi chi > 0.83 merging.",
+      "acceptanceCriteria": [
+        "No cascade stubs in subdivided trees",
+        "All subdivision-created junctions are bifurcations (2 children exactly)",
+        "Trifurcation rate < 10% (only from Barabasi merging, not subdivision)",
+        "S/E ratios emerge naturally from bifurcation chains (compare to Table 5)",
+        "Asymmetry built into subdivision (not post-hoc)",
+        "Diameters sampled from real Kassab distributions",
+        "Lengths sampled from real Kassab distributions",
+        "No hard floor clamp — truncated Normal for order-1 (smallest arterioles)",
+        "Murray's law holds at all new junctions (< 1% deviation)",
+        "All existing tests still pass (may need updating)",
+        "At least 15 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1039",
+      "title": "Fix asymmetry to match Kassab empirical distribution",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": ["VESSEL-1038"],
+      "description": "Ensure the asymmetry ratio (r_small/r_large) at bifurcations matches Kassab's empirically measured distribution.\n\nCurrent problem: Median asymmetry is 0.94 (target ~0.76). This is because:\n1. Post-hoc assignment gets overwritten by Murray propagation\n2. Floor clamping pushes small daughters up\n3. Beta(2.5, 0.8) has theoretical median ~0.81, not 0.76\n\nFix approach:\n1. Verify the asymmetry source: Read Kassab papers to find the actual measured asymmetry distribution. It may not be Beta(2.5, 0.8). Check BF02368296.pdf (Kassab & Fung 1995) for measured D1/D0 and D2/D0 ratios.\n2. If asymmetry is baked into subdivision (VESSEL-1038), it should not be overwritten. Verify that Murray propagation does not destroy the asymmetry.\n3. The asymmetry should be measured at the ELEMENT level (element daughter diameter / element parent diameter), not segment level.\n4. May need order-dependent asymmetry: higher-order bifurcations may have different asymmetry than lower-order ones.\n\nValidation: KS test of measured asymmetry ratios against reference distribution (p > 0.05).",
+      "acceptanceCriteria": [
+        "Asymmetry source cited from specific paper/table",
+        "Median asymmetry ratio within 10% of Kassab value",
+        "KS test of asymmetry distribution p > 0.05",
+        "Asymmetry measured at element level (not segment level)",
+        "Murray's law propagation does not destroy asymmetry",
+        "At least 8 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1040",
+      "title": "Update validation framework for element-level Kassab metrics",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": ["VESSEL-1037", "VESSEL-1039"],
+      "description": "Overhaul the validation framework to use element-level statistics (the way Kassab measures them) instead of segment-level.\n\nChanges to validation.jl:\n1. validate_diameters_per_order: KS test element diameters (not segment diameters) against Kassab element-level N(mean, sd)\n2. validate_lengths_per_order: KS test element lengths against Kassab element-level N(mean, sd)\n3. validate_connectivity_matrix: Build CM from elements (not segments), chi-squared against real Kassab CM\n4. validate_segment_counts: Compare element counts per order against Kassab Table 9\n5. validate_se_ratios: Compare S/E ratios against Kassab Table 5\n6. validate_asymmetry: Measure asymmetry at element level\n7. Update generate_report_card to include all new metrics\n\nNew report card metrics:\n- Diameter KS per order (element-level): target >= 8/N orders pass at p > 0.05\n- Length KS per order (element-level): target >= 8/N orders pass at p > 0.05\n- Connectivity CM chi-squared: target p > 0.01\n- Asymmetry KS: target p > 0.05\n- Murray's law deviation: target mean < 0.1%, max < 5%\n- Trifurcation %: target < 10%\n- S/E ratios: target within 20% of Kassab Table 5\n- Element count ratios: target within 50% of Kassab Table 9\n- Orders populated: target >= N-1 orders present\n\nOverall pass: >= 7/9 metrics pass",
+      "acceptanceCriteria": [
+        "All validation uses element-level statistics",
+        "Element grouping integrated into validation pipeline",
+        "KS tests use element-level Kassab reference distributions",
+        "CM built from elements matches Kassab format",
+        "S/E ratio validation added",
+        "Element count validation added",
+        "Report card has >= 9 metrics",
+        "At least 15 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1041",
+      "title": "Update forest pipeline to use per-artery params and new subdivision",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": ["VESSEL-1038", "VESSEL-1040"],
+      "description": "Update generate_kassab_coronary to use the corrected per-artery parameters, new subdivision engine, and new validation.\n\nChanges:\n1. Use kassab_rca_params() for RCA, kassab_lad_params() for LAD, kassab_lcx_params() for LCX\n2. Remove post-hoc apply_full_kassab_radii! — radii are now baked into subdivision\n3. Subdivision produces bifurcation chains (not cascade stubs)\n4. Validation uses element-level metrics\n5. LCX gets 10 orders (not 12)\n6. Update handoff_order logic per artery\n7. Ensure backward compatibility: generate_kassab_coronary still works with default args\n\nAlso update examples/ to use new API.",
+      "acceptanceCriteria": [
+        "LAD uses kassab_lad_params()",
+        "LCX uses kassab_lcx_params() with 10 orders",
+        "RCA uses kassab_rca_params()",
+        "No post-hoc radius refinement needed",
+        "Element-level validation report shows improvement over P9 baseline",
+        "All existing pipeline tests pass (may need updating)",
+        "At least 8 new tests"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1042",
+      "title": "VERIFY: Full Kassab parity validation — target >= 7/9 metrics pass",
+      "type": "VERIFY",
+      "status": "open",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": ["VESSEL-1041"],
+      "description": "Run the full validation suite on a generated coronary forest and verify that >= 7/9 metrics pass, achieving near-exact Kassab parity.\n\nTest configuration:\n- 2000 terminals per artery (LAD=2000, LCX=1200, RCA=1600)\n- handoff_order per artery (typically 5-7)\n- Full subdivision to order 1 (capillaries at order 0 are excluded per Kassab)\n\nFor EACH artery (LAD, LCX, RCA), run report card:\n1. Diameter KS per order (element-level): >= 8/N orders pass\n2. Length KS per order (element-level): >= 8/N orders pass\n3. Connectivity CM chi-squared: p > 0.01\n4. Asymmetry KS: p > 0.05\n5. Murray's law deviation: mean < 0.1%\n6. Trifurcation %: < 10%\n7. S/E ratios: within 20% of Table 5 for >= 8/N orders\n8. Element counts: within 50% of Table 9 for >= 8/N orders\n9. Orders populated: >= N-1 orders\n\nOverall target: >= 7/9 metrics pass for EACH artery.\n\nIf metrics fail, diagnose root cause and fix. This is the gating story for P10 completion.\n\nDocument results in ralph_loop/progress.md with per-metric pass/fail and comparison to P9 baseline (2/6).",
+      "acceptanceCriteria": [
+        ">= 7/9 metrics pass for RCA",
+        ">= 7/9 metrics pass for LAD",
+        ">= 7/9 metrics pass for LCX",
+        "Report card documented in progress.md",
+        "Comparison to P9 baseline (was 2/6 = 33%)",
+        "Any remaining failures diagnosed with root cause",
+        "All existing tests pass"
+      ]
+    },
+
+    {
+      "id": "VESSEL-1043",
+      "title": "Fix remaining validation failures and achieve >= 8/9 pass",
+      "type": "IMPL",
+      "status": "open",
+      "priority": 9,
+      "milestone": "P10",
+      "blockedBy": ["VESSEL-1042"],
+      "description": "Address any remaining validation failures from VESSEL-1042. This is the final polish story.\n\nCommon remaining issues and fixes:\n- If diameter KS fails for specific orders: check if the subdivision samples from the correct distribution, check if Murray propagation shifts values\n- If length KS fails: check if element length accumulation is correct, check CCO skeleton segment lengths\n- If CM fails: check if element grouping correctly identifies boundaries, check if subdivision produces correct daughter counts\n- If asymmetry fails: try order-dependent asymmetry parameters\n- If S/E ratio fails: check bifurcation chain logic\n\nTarget: >= 8/9 metrics pass for all three arteries.\n\nIf 8/9 is not achievable, document exactly which metric fails and why (e.g., 'order 11 has only 2-3 elements, insufficient for KS test — inherent limitation of finite tree size').\n\nFinal report card in progress.md.",
+      "acceptanceCriteria": [
+        ">= 8/9 metrics pass for at least 2 of 3 arteries",
+        "Any remaining failures explained with root cause",
+        "No fabricated or approximate data in parameters.jl",
+        "All CM entries trace to Kassab 1993 Tables 6-8",
+        "All diameter/length data traces to Kassab 1993 Tables 1-3",
+        "Final report card in progress.md",
+        "All tests pass"
       ]
     }
   ]

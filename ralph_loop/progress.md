@@ -13,10 +13,10 @@
 - Package loads: untested
 
 ### Story Status
-- Total: 28 stories (VESSEL-1000 to VESSEL-1027)
-- Done: 0
-- Open: 28
-- Milestones: P0 (Discovery) through P8 (Integration)
+- Total: 44 stories (VESSEL-1000 to VESSEL-1043)
+- Done: 34 (P0-P9 complete)
+- Open: 10 (P10: VESSEL-1034 to VESSEL-1043)
+- Milestones: P0-P9 done, P10 (Exact Kassab Parity) in progress
 
 ### Key Scientific Parameters
 - Murray exponent: 7/3 = 2.33 (Huo-Kassab 2007, NOT 3.0)
@@ -521,7 +521,7 @@
   - Subdivision is extremely fast (~1s for 4M segments) because it only does local add_segment! calls with no intersection checking
   - update_radii! O(n) BFS is correct and faster, but the generation-sweep was already O(n) in practice (each segment visited once per generation, max_gen << n)
   - Peak memory well under 8GB — SoA Float64 arrays for 4M segments ≈ 30 arrays × 4M × 8B = 960MB
-- Next: P9 complete. Remaining: P8 (VESSEL-1024 JLD2/VTP, VESSEL-1025 Makie, VESSEL-1026 STL, VESSEL-1027 Demo)
+- Next: P9 complete. Remaining: P8 (Export) then P10 (Exact Kassab Parity)
 
 ### 2026-03-06: VESSEL-1024 [PASS]
 - Attempted: Implement JLD2 save/load and VTP centerline export
@@ -610,4 +610,64 @@
   - MorphometricParams is a plain struct (no @kwdef) — must use positional construction
   - 5000-terminal multi-tree CCO is slow (~8min) due to O(n) inter-tree collision checking per candidate
   - Subdivision is negligible even for 386K segments (<1s)
-- Status: ALL milestones complete (P0-P9, 34/34 stories done)
+- Status: P0-P9 complete (34/34 stories done). P10 (Exact Kassab Parity) added.
+
+### 2026-03-06: P10 PLANNING — Exact Kassab Parity
+- **Audit result**: Current validation passes 2/6 metrics (33%). Murray's law and order count pass; diameter KS, length KS, connectivity, asymmetry, trifurcation rate all fail.
+- **Root causes identified** (see ralph_loop/research/kassab_parity_gaps.md):
+  1. Fabricated CM values in parameters.jl (not from real Kassab Tables 6-8)
+  2. Wrong Strahler ordering (diameter binning, not iterative Jiang 1994 method)
+  3. No element grouping (Kassab validates elements, not segments)
+  4. Cascade stubs inflate trifurcation rate to 44% (target 8.3%)
+  5. Post-hoc asymmetry destroyed by Murray propagation + floor clamp
+  6. Fabricated diameter/length data (not from real Tables 1-3)
+  7. Single CM for all arteries (RCA/LAD/LCX differ significantly)
+- **Papers downloaded** to `/Users/daleblack/Documents/vessel tree growing papers/`:
+  - Kassab et al. 1993 — morphometry of pig coronary arterial trees
+  - Jiang et al. 1994 — diameter-defined Strahler system
+  - Kassab & Fung 1995 — arteriolar bifurcation pattern
+  - Huo & Kassab 2009 — vascular volume scaling law
+- **Research notes created**:
+  - `ralph_loop/research/kassab_1993_real_data.md` — All Tables 1-9 extracted (needs PDF verification)
+  - `ralph_loop/research/jiang_1994_methodology.md` — Correct Strahler algorithm
+  - `ralph_loop/research/kassab_parity_gaps.md` — 8 gaps with fixes
+- **10 new P10 stories added** (VESSEL-1034 through VESSEL-1043):
+  - VESSEL-1034: Verify all real data from PDFs
+  - VESSEL-1035: Replace fabricated CM + per-artery params
+  - VESSEL-1036: Implement diameter-defined Strahler (Jiang 1994)
+  - VESSEL-1037: Implement element grouping
+  - VESSEL-1038: Fix subdivision (bifurcation chains, no cascade stubs)
+  - VESSEL-1039: Fix asymmetry distribution
+  - VESSEL-1040: Update validation to element-level
+  - VESSEL-1041: Update pipeline with per-artery params
+  - VESSEL-1042: VERIFY >= 7/9 metrics pass
+  - VESSEL-1043: Polish to >= 8/9 metrics pass
+- **Target**: >= 8/9 validation metrics pass for all three arteries using exclusively real published data
+- Regression gate: 21,200 tests pass (baseline for P10)
+- Next: VESSEL-1034 (verify PDF data)
+
+### 2026-03-06: VESSEL-1034 [PASS]
+- Attempted: Read all 4 PDFs page-by-page and verify every number in kassab_1993_real_data.md
+- Result: CRITICAL FINDING — the previous research file had systematically WRONG data for Tables 1-5 and 9. Created kassab_verified_data.md with all correct values.
+- Regression gate: N/A (discovery story, no source code)
+- Key Discrepancies Found:
+  1. **Tables 1-3 (Diameter/Length)**: Research file had D=10.8±2.85 for RCA order 1 segments; PDF shows D=9.6±0.97. ALL diameter/length values were wrong. Source of wrong values is unknown.
+  2. **Table 5 (S/E ratios)**: Research file had 2.17 for RCA order 1; PDF shows 1.88±0.99. Research file used aggregate total_seg/total_elem, not per-element mean.
+  3. **Table 9 (Element counts)**: Research file had 80,968 for RCA order 2; PDF shows 138,050±46,070. Orders 2-6 were systematically wrong for all arteries.
+  4. **Table 4 (Empirical constants)**: Research file values don't match PDF.
+  5. **Tables 6-8 (Connectivity Matrices)**: CORRECT in research file — verified entry by entry.
+  6. **Asymmetry Beta(2.5, 0.8)**: NOT cited in Kassab 1993 or Kassab & Fung 1995. Source UNVERIFIED.
+- Papers Verified:
+  - Kassab 1993: Tables 1-9 all verified. 5 pigs, 3 arteries (RCA 11 orders, LAD 11 orders, LCX 10 orders). Orders 1-3 data pooled across arteries from histological specimens.
+  - Jiang 1994: Eq 3A/3B confirmed for diameter bounds. Convergence in 2-3 cycles. Element grouping method verified.
+  - Kassab & Fung 1995: Murray's law gamma=3 validated for arterioles 9-50 μm. With wall thickness: gamma≈2.73. 489+1193 bifurcation nodes measured.
+  - Huo & Kassab 2009: Volume scaling V_c = K_v * D_s^(2/3) * L_c. Exponents 3/7, 1^(2/7), 2^(1/3), 3 for four structure-function relations.
+- Learning:
+  - Tables 1-3 n values are SAMPLE sizes (direct measurements), NOT population totals
+  - Table 9 gives population totals (extrapolated from CM + trunk data via Eq 10)
+  - Total segments ≈ Table 9 elements × Table 5 S/E ratios
+  - RCA total segments ≈ 1.18M (not 854K as previously estimated), whole heart ≈ 3.5M
+  - The CM-implied asymmetry is more reliable than an unverified Beta distribution
+  - Lengths in Tables 1-3 are in MILLIMETERS, not micrometers
+  - Table 9 errors are ± SE (Standard Error), not ± SD
+- Next: VESSEL-1035 (Replace fabricated CM with real Kassab Tables 6-8 + per-artery params)

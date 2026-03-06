@@ -124,28 +124,58 @@ julia --project=. test/runtests.jl 2>&1 | tail -10
 | VESSEL-1019  | 250           |
 | VESSEL-1021  | 280           |
 | VESSEL-1025  | 350           |
+| VESSEL-1033  | 21000         |
+| VESSEL-1035  | 21050         |
+| VESSEL-1036  | 21100         |
+| VESSEL-1037  | 21150         |
+| VESSEL-1038  | 21200         |
+| VESSEL-1040  | 21250         |
+| VESSEL-1043  | 21300         |
 
 ---
 
-## RULE #6: KASSAB DATA IS GROUND TRUTH
+## RULE #6: KASSAB DATA IS GROUND TRUTH — NO FABRICATION
 
-The morphometric tables from Kassab 1993 are the validation gold standard:
+**ZERO TOLERANCE for fabricated, approximate, or made-up data.**
 
+Every number in `parameters.jl` MUST trace to a specific table and page number in a published paper:
+- **Kassab et al. 1993** (Am J Physiol Heart 265:H350-H365) — Tables 1-9
+- **Jiang et al. 1994** (J Appl Physiol 76:882-892) — diameter-defined Strahler method
+- **Kassab & Fung 1995** (Ann Biomed Eng 23:13-20) — Murray's law validation
+- **Huo & Kassab 2007/2009** — gamma=7/3, volume scaling
+
+PDFs at: `/Users/daleblack/Documents/vessel tree growing papers/`
+
+### Three SEPARATE connectivity matrices (NOT one generic "coronary" CM):
+- RCA: Kassab 1993 Table 6 (11 orders)
+- LAD: Kassab 1993 Table 7 (11 orders)
+- LCX: Kassab 1993 Table 8 (10 orders)
+
+### Real data (SEGMENTS) from Kassab 1993:
 ```
-Order  Diameter(um)  Length(um)   L/D
-  0       8            20        2.5
-  1      15            50        3.3
-  2      30           120        4.0
-  3      56           280        5.0
-  4     102           650        6.4
-  5     184          1500        8.2
-  6     330          3500       10.6
-  7     590          8000       13.6
-  8    1050         18000       17.1
-  9    1870         40000       21.4
- 10    3330         80000       24.0
- 11    4500        150000       33.3
+RCA Segments:
+Order  D(um)±SD       L(um)±SD       N_seg
+1     10.8±2.85      96±78          854,880
+2     21.5±3.48      92±74          163,233
+3     39.1±5.64      100±83          43,858
+4     69.2±10.5      123±111         12,285
+5     124±20.2       176±166          5,449
+6     228±40.4       311±299          3,279
+7     408±68.8       503±440          1,563
+8     703±118        810±720            550
+9    1211±210       1309±1260           135
+10   2167±290       1997±1750            36
+11   3480±440       2610±1870             6
 ```
+
+### Key distinction: Segments vs Elements
+- **Segment**: vessel between two bifurcation nodes
+- **Element**: series of same-order segments (Kassab's fundamental unit)
+- The **connectivity matrix operates on ELEMENTS**, not segments
+- Element diameter = mean of segment diameters; element length = sum of segment lengths
+- Validate against ELEMENT-level distributions
+
+See `ralph_loop/research/kassab_1993_real_data.md` for all three arteries' complete tables.
 
 Generated trees MUST be validated against these distributions. A tree that doesn't match Kassab is wrong, no matter how pretty it looks.
 
@@ -283,6 +313,61 @@ ks = ApproximateTwoSampleKSTest(generated_diameters, kassab_diameters)
 @test tree.n_terminals >= target_terminals * 0.95  # At least 95% success rate
 @test all(seg_data.radius[1:tree.n] .> 0)          # All radii positive
 ```
+
+---
+
+## RULE #13: DIAMETER-DEFINED STRAHLER ORDERING (JIANG 1994)
+
+Do NOT use simple diameter binning for Strahler order assignment. Kassab uses an ITERATIVE
+diameter-defined Strahler system (Jiang et al. 1994):
+
+1. Initialize with topological Strahler ordering
+2. Compute per-order mean D_n and SD_n
+3. Redefine bounds: lower = [(D_{n-1}+SD_{n-1}) + (D_n-SD_n)]/2, upper = [(D_n+SD_n) + (D_{n+1}-SD_{n+1})]/2
+4. Reassign orders by diameter range
+5. Iterate until < 1% of vessels change order
+
+See `ralph_loop/research/jiang_1994_methodology.md` for full algorithm.
+
+---
+
+## RULE #14: NO CASCADE STUBS IN SUBDIVISION
+
+Subdivision must produce ONLY bifurcations (2 children). When the CM says a parent element has
+N daughters, create a chain of N-1 bifurcations (each peeling off one daughter), NOT a single
+node with N children connected by tiny stub segments.
+
+This naturally produces the S/E ratio (multiple segments per element) and keeps trifurcation
+rate below the Barabasi target of ~8.3%.
+
+---
+
+## RULE #15: ELEMENT-LEVEL VALIDATION
+
+All Kassab validation must operate on ELEMENTS (series of same-order segments), not on
+individual segments. The connectivity matrix, diameter distributions, length distributions,
+and asymmetry ratios in Kassab 1993 are all element-level measurements.
+
+Implement element grouping BEFORE running validation statistics.
+
+---
+
+## RULE #16: P10 (EXACT KASSAB PARITY) IS THE CURRENT PRIORITY
+
+P10 stories (VESSEL-1034 through VESSEL-1043) have priority 9 and are the current focus.
+
+Previously, P9 stories (VESSEL-1028 through VESSEL-1033) had priority 7 and ran before P8 stories (priority 8).
+
+P9 uses a **hybrid CCO + statistical subdivision** approach:
+1. **CCO phase**: Grow upper-order skeleton (orders 5-11) with spatial grid acceleration. ~1000-2000 terminals per artery. This gives realistic spatial layout with intersection checking.
+2. **Subdivision phase**: Recursively split each terminal down to order 0 (8um capillaries) using Kassab's connectivity matrix. Each order-k terminal gets daughters per CM[m+1, k+1]. NO intersection checking at capillary scale — pure statistical tree generation.
+3. **Refinement phase**: Apply Kassab asymmetry radii POST-HOC (not during growth). Apply Barabasi junction geometry.
+
+This produces ~4-6M total segments in < 5 minutes. The connectivity matrix IS the fast path — it encodes the complete branching statistics directly.
+
+**Key insight**: You do NOT need to grow millions of capillaries one-at-a-time with CCO. The CM tells you exactly how many daughters of each order to create. CCO handles the physics of large-vessel layout; the CM handles the statistics of microvasculature branching.
+
+Do NOT attempt to grow millions of terminals with the CCO loop. That is O(n²) and will take weeks. Use subdivision.
 
 ---
 
