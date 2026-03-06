@@ -14,7 +14,7 @@
     "P2": { "name": "CCO Engine", "stories": 5, "done": 5 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 2 },
     "P4": { "name": "Kassab Constraints", "stories": 3, "done": 3 },
-    "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 1 },
+    "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 2 },
     "P6": { "name": "Validation", "stories": 2, "done": 0 },
     "P7": { "name": "Multi-Tree Forest", "stories": 2, "done": 0 },
     "P8": { "name": "Export & Integration", "stories": 4, "done": 0 }
@@ -382,7 +382,7 @@
       "id": "VESSEL-1018",
       "title": "Barabasi: Trifurcation detection + handling",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
       "priority": 5,
       "milestone": "P5",
       "blockedBy": ["VESSEL-1017"],

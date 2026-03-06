@@ -112,12 +112,15 @@ function sample_terminal_candidate(
 end
 
 """
-    grow_tree!(tree, domain, n_terminals, params; rng=Random.default_rng(), verbose=false, kassab=false)
+    grow_tree!(tree, domain, n_terminals, params; rng=Random.default_rng(), verbose=false, kassab=false, trifurcation=false)
 
 Main CCO growth loop. Adds `n_terminals` terminal segments to the tree.
 
 When `kassab=true`, uses Kassab asymmetry sampling for daughter radii instead
 of symmetric bifurcations.
+
+When `trifurcation=true`, checks for trifurcation merges (Barabasi chi > 0.83)
+before creating new bifurcations.
 
 The tree must have a root segment already added before calling this function.
 """
@@ -129,6 +132,7 @@ function grow_tree!(
     rng::AbstractRNG=Random.default_rng(),
     verbose::Bool=false,
     kassab::Bool=false,
+    trifurcation::Bool=false,
 )
     capacity = tree.segments.capacity
     gamma = params.gamma
@@ -195,6 +199,30 @@ function grow_tree!(
         # Check domain crossing
         if check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz))
             continue
+        end
+
+        # Check for trifurcation merge before creating bifurcation
+        if trifurcation
+            merge_target = check_trifurcation_merge(tree, (bx, by, bz), params)
+            if merge_target !== nothing
+                # Merge into existing bifurcation as trifurcation
+                new_id = merge_to_trifurcation!(tree, merge_target, (tx, ty, tz), terminal_radius, params)
+
+                if kassab
+                    parent_radius = tree.segments.radius[Int(merge_target)]
+                    asymmetry = sample_asymmetry(params, rng)
+                    _, r_small = compute_daughter_radii(parent_radius, asymmetry, gamma)
+                    tree.segments.radius[Int(new_id)] = r_small
+                end
+
+                update_radii!(tree, gamma)
+                added += 1
+
+                if verbose && added % 100 == 0
+                    println("  grow_tree!: $added / $n_terminals terminals added ($(tree.segments.n) segments)")
+                end
+                continue
+            end
         end
 
         # Add bifurcation
