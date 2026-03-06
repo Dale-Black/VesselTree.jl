@@ -69,3 +69,5 @@ import AcceleratedKernels as AK
     end
 
 end
+
+include("test_types.jl")

@@ -109,3 +109,19 @@
   - Correct AcceleratedKernels UUID is 6a4ca0a5-0e36-4168-a932-d9be78d558f1 (not the one in General registry search)
   - `import AcceleratedKernels as AK` pattern works well for namespacing
 - Next: VESSEL-1005 (Core types: SoA segment storage + tree topology)
+
+### 2026-03-05: VESSEL-1005 [PASS]
+- Attempted: Implement SoA segment storage, tree topology, and composite VascularTree type
+- Result: 77 new tests pass (98 total), all acceptance criteria met
+- Regression gate: 98 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/types.jl — SegmentData{V}, TreeTopology, VascularTree, add_segment!, get_children, n_segments
+  - test/test_types.jl — 12 testsets with 77 tests
+  - src/VesselTree.jl — include types.jl, export public API
+  - test/runtests.jl — include test_types.jl
+- Learning:
+  - Terminal counting: first child of parent is net-zero (parent loses terminal, child gains it); only second child is net +1
+  - SoA views (`@view field[1:n]`) work with AK.maximum and other operations
+  - Capacity-based pre-allocation works cleanly: error on overflow, views for active region
+  - junction_type as Symbol (:none, :bifurcation, :trifurcation) keeps topology CPU-side
+- Next: VESSEL-1006 (Morphometric parameters + domain types)

@@ -17,4 +17,9 @@ const SPROUTING_RHO_TH = 0.83        # Barabasi 2026
 const ASYMMETRY_ALPHA = 2.5          # Beta distribution parameter
 const ASYMMETRY_BETA = 0.8           # Beta distribution parameter
 
+include("types.jl")
+
+export VascularTree, SegmentData, TreeTopology
+export add_segment!, get_children, n_segments
+
 end # module VesselTree

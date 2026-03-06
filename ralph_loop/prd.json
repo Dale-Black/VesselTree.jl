@@ -10,7 +10,7 @@
   },
   "milestones": {
     "P0": { "name": "Discovery", "stories": 4, "done": 4 },
-    "P1": { "name": "Foundation", "stories": 3, "done": 1 },
+    "P1": { "name": "Foundation", "stories": 3, "done": 2 },
     "P2": { "name": "CCO Engine", "stories": 5, "done": 0 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
     "P4": { "name": "Kassab Constraints", "stories": 3, "done": 0 },
@@ -124,7 +124,8 @@
       "id": "VESSEL-1005",
       "title": "Core types: SoA segment storage + tree topology",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "SegmentData{V} SoA storage (proximal/distal xyz, radius, length, hemodynamics) with parameterized vector type. TreeTopology with parent/child1-3, Strahler order, generation, terminal flag, junction type. VascularTree composite with add_segment!, get_children, n_segments. Pre-allocation with capacity. 77 tests in test_types.jl (98 total).",
       "priority": 1,
       "milestone": "P1",
       "blockedBy": ["VESSEL-1000", "VESSEL-1004"],
