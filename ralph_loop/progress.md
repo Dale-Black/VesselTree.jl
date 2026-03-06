@@ -200,3 +200,16 @@
   - Murray's law holds exactly at every bifurcation after update_radii! (verified)
   - Growth rate depends on domain size vs intersection threshold balance
 - Next: VESSEL-1011 (Spatial indexing for fast segment queries)
+
+### 2026-03-05: VESSEL-1011 [PASS]
+- Attempted: Implement spatial grid for fast segment queries
+- Result: 32 new tests pass (2864 total), P2 CCO Engine milestone complete
+- Regression gate: 2864 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/spatial.jl — SpatialGrid, build_grid, insert!, query_nearby
+  - test/test_spatial.jl — 6 testsets with 32 tests (including 20 no-false-negative checks)
+- Learning:
+  - Dict-based cells avoid pre-allocating huge 3D array for sparse grids
+  - Cell neighborhood search radius = ceil(search_radius / cell_size) cells in each direction
+  - Query returns all segments in neighboring cells; caller does exact distance filtering
+- Next: VESSEL-1012 (Hemodynamics: Poiseuille resistance + pressure/flow)

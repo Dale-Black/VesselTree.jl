@@ -24,6 +24,7 @@ include("distance.jl")
 include("intersection.jl")
 include("kamiya.jl")
 include("murray.jl")
+include("spatial.jl")
 include("growth.jl")
 
 export VascularTree, SegmentData, TreeTopology
@@ -39,5 +40,6 @@ export surface_cost_at_t, optimize_bifurcation_point
 export evaluate_all_connections!, select_best_connection
 export compute_radii_symmetric, compute_radii_asymmetric
 export update_radii!, grow_tree!, add_bifurcation!
+export SpatialGrid, build_grid, query_nearby
 
 end # module VesselTree
