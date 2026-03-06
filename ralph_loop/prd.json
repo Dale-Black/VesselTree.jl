@@ -9,7 +9,7 @@
     "science": "CCO growth + Kassab morphometry (gamma=7/3, asymmetry Beta(2.5,0.8)) + Barabasi surface optimization (chi/rho thresholds at 0.83)"
   },
   "milestones": {
-    "P0": { "name": "Discovery", "stories": 4, "done": 3 },
+    "P0": { "name": "Discovery", "stories": 4, "done": 4 },
     "P1": { "name": "Foundation", "stories": 3, "done": 0 },
     "P2": { "name": "CCO Engine", "stories": 5, "done": 0 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
@@ -84,7 +84,8 @@
       "id": "VESSEL-1003",
       "title": "DISCOVERY: Barabasi 2026 surface optimization for blood vessels",
       "type": "DISCOVERY",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Surface optimization fully documented: chi parameter (w/r) with trifurcation transition at 0.83, rho parameter (r_small/r_large) with sprouting/branching transition at 0.83, junction surface computation via pants decomposition, P(lambda) distribution, blood vessel data (8.3% trifurcations, 25.6% sprouting). Implementation strategy: use threshold rules instead of PDE solver. min-surf-netw is Mathematica (not Python).",
       "priority": 0,
       "milestone": "P0",
       "blockedBy": [],

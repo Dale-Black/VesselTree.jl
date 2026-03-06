@@ -77,3 +77,20 @@
   - Human data more symmetric than porcine (median S=0.59 vs <0.40 for large vessels)
   - Validation: KS test per order, Murray's law check, angle bimodality
 - Next: VESSEL-1003 (Barabasi surface optimization)
+
+### 2026-03-05: VESSEL-1003 [PASS]
+- Attempted: Study Barabasi 2026 Nature paper and min-surf-netw code for surface optimization
+- Result: Complete documentation of chi/rho parameters, sprouting/branching regimes, trifurcation stability, junction surface computation, and implementation strategy
+- Regression gate: N/A (discovery story, no source code)
+- Learning:
+  - chi = w/r (circumference/spacing); trifurcation transition at chi=0.83
+  - rho = r_small/r_large; sprouting (perpendicular) when rho < 0.83, branching (Y-shape) when rho >= 0.83
+  - Blood vessels: 8.3% trifurcations, 25.6% sprouting, 91% bifurcations
+  - min-surf-netw is Mathematica (NOT Python as assumed in PRD) using FEM mesh optimization
+  - Full PDE solver is overkill for our use — use threshold rules + Murray angles instead
+  - Surface cost (r*l) vs volume cost (r^2*l) — gamma=7/3 is consistent with surface dominance
+  - Bimodal angle distribution emerges naturally from sprouting+branching separation
+  - Lambda order parameter: lambda=l/w, lambda->0 at trifurcation merge
+  - Junction surfaces modeled via "pants decomposition" of tube cross-sections
+  - All real networks are ~25% longer than Steiner-optimal (surface cost penalty)
+- Next: VESSEL-1004 (Project setup: Package skeleton with AK.jl) — all P0 discovery complete
