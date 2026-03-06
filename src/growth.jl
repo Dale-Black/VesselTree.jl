@@ -40,16 +40,21 @@ function add_bifurcation!(
     ex = bx - px; ey = by - py; ez = bz - pz
     seg.seg_length[parent_idx] = sqrt(ex*ex + ey*ey + ez*ez)
 
-    # Save original children of parent (if it was already a bifurcation)
+    # Save original children of parent (if it was already a bifurcation/trifurcation)
     orig_child1 = topo.child1_id[parent_idx]
     orig_child2 = topo.child2_id[parent_idx]
+    orig_child3 = topo.child3_id[parent_idx]
 
     # Reset parent children (they will be set by add_segment!)
     topo.child1_id[parent_idx] = Int32(-1)
     topo.child2_id[parent_idx] = Int32(-1)
+    topo.child3_id[parent_idx] = Int32(-1)
     topo.is_terminal[parent_idx] = true
     if topo.junction_type[parent_idx] == :bifurcation
         tree.n_bifurcations -= 1
+        tree.n_terminals += 1
+    elseif topo.junction_type[parent_idx] == :trifurcation
+        tree.n_trifurcations -= 1
         tree.n_terminals += 1
     end
     topo.junction_type[parent_idx] = :none
@@ -69,6 +74,13 @@ function add_bifurcation!(
     if orig_child2 > 0
         topo.child2_id[cont_id] = orig_child2
         topo.parent_id[orig_child2] = cont_id
+    end
+    if orig_child3 > 0
+        topo.child3_id[cont_id] = orig_child3
+        topo.parent_id[orig_child3] = cont_id
+        topo.junction_type[cont_id] = :trifurcation
+        tree.n_bifurcations -= 1
+        tree.n_trifurcations += 1
     end
 
     # New terminal segment: bifurcation → terminal point
@@ -112,9 +124,102 @@ function sample_terminal_candidate(
 end
 
 """
+    _domain_size(domain) -> Float64
+
+Compute representative size of a domain for adaptive thresholding.
+"""
+function _domain_size(domain::AbstractDomain)
+    if domain isa SphereDomain
+        return domain.radius
+    elseif domain isa BoxDomain
+        return max(
+            domain.max_corner[1] - domain.min_corner[1],
+            domain.max_corner[2] - domain.min_corner[2],
+            domain.max_corner[3] - domain.min_corner[3],
+        )
+    elseif domain isa EllipsoidDomain
+        return max(domain.semi_axes[1], domain.semi_axes[2], domain.semi_axes[3])
+    end
+    return 1.0
+end
+
+"""
+    _grid_cell_size(domain_size, n_segments) -> Float64
+
+Adaptive cell size: shrinks as tree grows to maintain good locality.
+"""
+function _grid_cell_size(domain_size::Float64, n_segments::Int)
+    # Target ~10-20 segments per cell on average
+    # cell volume ~ domain^3 / n_cells, n_cells ~ n_segments / 10
+    return domain_size / max(1.0, (n_segments / 10.0)^(1.0 / 3.0))
+end
+
+"""
+    _insert_segment_to_grid!(grid, segments, idx)
+
+Insert segment `idx` into spatial grid by its midpoint.
+"""
+function _insert_segment_to_grid!(grid::SpatialGrid, segments::SegmentData, idx::Int)
+    mx = (segments.proximal_x[idx] + segments.distal_x[idx]) / 2.0
+    my = (segments.proximal_y[idx] + segments.distal_y[idx]) / 2.0
+    mz = (segments.proximal_z[idx] + segments.distal_z[idx]) / 2.0
+    insert!(grid, idx, mx, my, mz)
+end
+
+# Threshold: only use grid when tree has enough segments for it to matter.
+# Below this, brute force is fast and gives exact K-nearest.
+const _GRID_ACTIVATION_THRESHOLD = 200
+
+"""
+    _find_nearest_via_grid(grid, segments, tx, ty, tz, search_radius, K, n) -> Vector{Int}
+
+Find K nearest segments to point (tx,ty,tz) using spatial grid. Falls back to
+brute-force scan if grid returns fewer than K candidates.
+"""
+function _find_nearest_via_grid(
+    grid::SpatialGrid,
+    segments::SegmentData,
+    distances_buf::Vector{Float64},
+    tx::Float64, ty::Float64, tz::Float64,
+    search_radius::Float64,
+    K::Int,
+    n::Int,
+)
+    # For small trees, brute force is fast and exact
+    if n < _GRID_ACTIVATION_THRESHOLD
+        compute_all_distances!(distances_buf, segments, tx, ty, tz, n)
+        K_actual = min(K, n)
+        return collect(partialsortperm(@view(distances_buf[1:n]), 1:K_actual))
+    end
+
+    nearby = query_nearby(grid, tx, ty, tz, search_radius)
+
+    if length(nearby) >= K
+        # Compute distances only for nearby segments
+        nearby_dists = Vector{Float64}(undef, length(nearby))
+        for (j, si) in enumerate(nearby)  # sequential: small subset from grid query
+            nearby_dists[j] = point_segment_distance(
+                tx, ty, tz,
+                segments.proximal_x[si], segments.proximal_y[si], segments.proximal_z[si],
+                segments.distal_x[si], segments.distal_y[si], segments.distal_z[si],
+            )
+        end
+        k_actual = min(K, length(nearby))
+        perm = partialsortperm(nearby_dists, 1:k_actual)
+        return [nearby[perm[j]] for j in 1:k_actual]
+    else
+        # Fall back to full scan
+        compute_all_distances!(distances_buf, segments, tx, ty, tz, n)
+        K_actual = min(K, n)
+        return collect(partialsortperm(@view(distances_buf[1:n]), 1:K_actual))
+    end
+end
+
+"""
     grow_tree!(tree, domain, n_terminals, params; rng, verbose, kassab, trifurcation, barabasi)
 
 Main CCO growth loop. Adds `n_terminals` terminal segments to the tree.
+Uses SpatialGrid for O(1) nearest-neighbor queries instead of O(n) full scan.
 
 Keywords:
 - `kassab=false`: Kassab asymmetry sampling for daughter radii
@@ -146,19 +251,14 @@ function grow_tree!(
     # Initial terminal radius estimate
     terminal_radius = params.diameter_mean[1] / 2.0 / 1000.0  # um → mm (or whatever units)
 
-    # Minimum distance between segments (scales with tree size)
-    domain_size = 1.0
-    if domain isa SphereDomain
-        domain_size = domain.radius
-    elseif domain isa BoxDomain
-        domain_size = max(
-            domain.max_corner[1] - domain.min_corner[1],
-            domain.max_corner[2] - domain.min_corner[2],
-            domain.max_corner[3] - domain.min_corner[3],
-        )
-    elseif domain isa EllipsoidDomain
-        domain_size = max(domain.semi_axes[1], domain.semi_axes[2], domain.semi_axes[3])
-    end
+    domain_size = _domain_size(domain)
+
+    # Build initial spatial grid
+    n_initial = tree.segments.n
+    cell_size = _grid_cell_size(domain_size, max(n_initial, 10))
+    grid = build_grid(tree.segments, n_initial, domain, cell_size)
+    last_rebuild_n = n_initial
+    grid_rebuild_interval = 100
 
     added = 0
     attempts = 0
@@ -167,6 +267,13 @@ function grow_tree!(
     while added < n_terminals && attempts < max_total_attempts
         attempts += 1
         n = tree.segments.n
+
+        # Rebuild grid periodically
+        if n - last_rebuild_n >= grid_rebuild_interval
+            cell_size = _grid_cell_size(domain_size, n)
+            grid = build_grid(tree.segments, n, domain, cell_size)
+            last_rebuild_n = n
+        end
 
         # Adaptive minimum distance
         d_thresh = domain_size / (10.0 * (n + 1)^(1.0 / 3.0))
@@ -179,27 +286,68 @@ function grow_tree!(
 
         tx, ty, tz = candidate
 
-        # Find best connection via Kamiya optimization
-        evaluate_all_connections!(costs_buf, bifurc_t_buf, tree.segments, n, tx, ty, tz, gamma)
-        seg_idx, t_opt, cost = select_best_connection(costs_buf, bifurc_t_buf, n)
+        # Find best connection among K nearest segments using spatial grid
+        K = min(n, 20)
+        search_radius = d_thresh * 5.0  # search wider than d_thresh for good candidates
+        nearest = _find_nearest_via_grid(grid, tree.segments, distances_buf, tx, ty, tz, search_radius, K, n)
 
-        # Bifurcation point
+        seg_idx = 0
+        t_opt = 0.5
+        best_cost = Inf
+        found = false
+
+        for ki in 1:length(nearest)
+            ci = nearest[ki]  # candidate segment index
+
+            # Optimize bifurcation point on this segment
+            ti, costi = optimize_bifurcation_point(
+                tree.segments.proximal_x[ci], tree.segments.proximal_y[ci], tree.segments.proximal_z[ci],
+                tree.segments.distal_x[ci], tree.segments.distal_y[ci], tree.segments.distal_z[ci],
+                tree.segments.radius[ci], tx, ty, tz, gamma)
+
+            costi >= best_cost && continue
+
+            # Compute bifurcation point
+            bx = tree.segments.proximal_x[ci] + ti * (tree.segments.distal_x[ci] - tree.segments.proximal_x[ci])
+            by = tree.segments.proximal_y[ci] + ti * (tree.segments.distal_y[ci] - tree.segments.proximal_y[ci])
+            bz = tree.segments.proximal_z[ci] + ti * (tree.segments.distal_z[ci] - tree.segments.proximal_z[ci])
+
+            # Check intersection
+            parent_r = tree.segments.radius[ci]
+            intersect_dist = max(parent_r * 2.0, d_thresh * 0.01)
+            check_intersections!(intersect_buf, tree.segments, bx, by, bz, tx, ty, tz, intersect_dist, n)
+
+            # Exclude topological neighbors
+            intersect_buf[ci] = false
+            topo = tree.topology
+            pp = topo.parent_id[ci]
+            if pp > 0
+                intersect_buf[pp] = false
+                for c in (topo.child1_id[pp], topo.child2_id[pp], topo.child3_id[pp])
+                    c > 0 && (intersect_buf[c] = false)
+                end
+            end
+            for c in (topo.child1_id[ci], topo.child2_id[ci], topo.child3_id[ci])
+                c > 0 && (intersect_buf[c] = false)
+            end
+
+            has_any_intersection(intersect_buf, n) && continue
+
+            # Check domain crossing
+            check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz)) && continue
+
+            best_cost = costi
+            seg_idx = ci
+            t_opt = ti
+            found = true
+        end
+
+        !found && continue
+
+        # Bifurcation point (recompute for selected segment)
         bx = tree.segments.proximal_x[seg_idx] + t_opt * (tree.segments.distal_x[seg_idx] - tree.segments.proximal_x[seg_idx])
         by = tree.segments.proximal_y[seg_idx] + t_opt * (tree.segments.distal_y[seg_idx] - tree.segments.proximal_y[seg_idx])
         bz = tree.segments.proximal_z[seg_idx] + t_opt * (tree.segments.distal_z[seg_idx] - tree.segments.proximal_z[seg_idx])
-
-        # Check intersection: new segment (bifurcation → terminal)
-        check_intersections!(intersect_buf, tree.segments, bx, by, bz, tx, ty, tz, d_thresh * 0.1, n)
-        # Exclude the parent segment from intersection check
-        intersect_buf[seg_idx] = false
-        if has_any_intersection(intersect_buf, n)
-            continue
-        end
-
-        # Check domain crossing
-        if check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz))
-            continue
-        end
 
         # Check for trifurcation merge before creating bifurcation
         if trifurcation
@@ -216,6 +364,10 @@ function grow_tree!(
                 end
 
                 update_radii!(tree, gamma)
+
+                # Insert new segment into grid
+                _insert_segment_to_grid!(grid, tree.segments, Int(new_id))
+
                 added += 1
 
                 if verbose && added % 100 == 0
@@ -224,6 +376,8 @@ function grow_tree!(
                 continue
             end
         end
+
+        n_before = tree.segments.n
 
         # Add bifurcation
         cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radius)
@@ -244,6 +398,12 @@ function grow_tree!(
         # Apply Barabasi junction geometry
         if barabasi
             apply_junction_geometry!(tree, Int32(seg_idx), params)
+        end
+
+        # Insert new segments into grid (parent was modified, add new daughters)
+        _insert_segment_to_grid!(grid, tree.segments, seg_idx)  # re-insert shortened parent
+        for new_seg_idx in (n_before + 1):tree.segments.n
+            _insert_segment_to_grid!(grid, tree.segments, new_seg_idx)
         end
 
         added += 1

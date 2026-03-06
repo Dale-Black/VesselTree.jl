@@ -213,6 +213,7 @@ function generate_coronary_forest(
     terminal_radius = params.diameter_mean[1] / 2.0 / 1000.0
     max_rounds = maximum(cfg.target_terminals for cfg in tree_configs) * 50
     added = Dict(cfg.name => 0 for cfg in tree_configs)
+    domain_size = _domain_size(domain)
 
     # Pre-allocate buffers per tree
     buffers = Dict{String, NamedTuple}()
@@ -224,6 +225,17 @@ function generate_coronary_forest(
             bifurc_t = zeros(cap),
             intersect = Vector{Bool}(undef, cap),
         )
+    end
+
+    # Spatial grids per tree
+    grids = Dict{String, SpatialGrid}()
+    last_rebuild = Dict{String, Int}()
+    grid_rebuild_interval = 100
+    for cfg in tree_configs
+        tree = trees[cfg.name]
+        cs = _grid_cell_size(domain_size, max(tree.segments.n, 10))
+        grids[cfg.name] = build_grid(tree.segments, tree.segments.n, domain, cs)
+        last_rebuild[cfg.name] = tree.segments.n
     end
 
     round = 0
@@ -239,8 +251,13 @@ function generate_coronary_forest(
             buf = buffers[cfg.name]
             n = tree.segments.n
 
-            # Domain size for adaptive thresholding
-            domain_size = domain isa SphereDomain ? domain.radius : 10.0
+            # Rebuild grid if needed
+            if n - last_rebuild[cfg.name] >= grid_rebuild_interval
+                cs = _grid_cell_size(domain_size, n)
+                grids[cfg.name] = build_grid(tree.segments, n, domain, cs)
+                last_rebuild[cfg.name] = n
+            end
+            grid = grids[cfg.name]
 
             d_thresh = domain_size / (10.0 * (n + 1)^(1.0 / 3.0))
 
@@ -261,22 +278,60 @@ function generate_coronary_forest(
             end
             collision && continue
 
-            # Find best connection
-            evaluate_all_connections!(buf.costs, buf.bifurc_t, tree.segments, n, tx, ty, tz, gamma)
-            seg_idx, t_opt, _ = select_best_connection(buf.costs, buf.bifurc_t, n)
+            # Find best connection using spatial grid
+            K = min(n, 20)
+            search_radius = d_thresh * 5.0
+            nearest = _find_nearest_via_grid(grid, tree.segments, buf.distances, tx, ty, tz, search_radius, K, n)
 
-            # Bifurcation point
-            bx = tree.segments.proximal_x[seg_idx] + t_opt * (tree.segments.distal_x[seg_idx] - tree.segments.proximal_x[seg_idx])
-            by = tree.segments.proximal_y[seg_idx] + t_opt * (tree.segments.distal_y[seg_idx] - tree.segments.proximal_y[seg_idx])
-            bz = tree.segments.proximal_z[seg_idx] + t_opt * (tree.segments.distal_z[seg_idx] - tree.segments.proximal_z[seg_idx])
+            seg_idx = 0
+            t_opt = 0.5
+            best_cost = Inf
+            found = false
 
-            # Self-intersection check
-            check_intersections!(buf.intersect, tree.segments, bx, by, bz, tx, ty, tz, d_thresh * 0.1, n)
-            buf.intersect[seg_idx] = false
-            has_any_intersection(buf.intersect, n) && continue
+            for ki in 1:length(nearest)
+                ci = nearest[ki]
 
-            # Domain crossing
-            check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz)) && continue
+                ti, costi = optimize_bifurcation_point(
+                    tree.segments.proximal_x[ci], tree.segments.proximal_y[ci], tree.segments.proximal_z[ci],
+                    tree.segments.distal_x[ci], tree.segments.distal_y[ci], tree.segments.distal_z[ci],
+                    tree.segments.radius[ci], tx, ty, tz, gamma)
+
+                costi >= best_cost && continue
+
+                bx = tree.segments.proximal_x[ci] + ti * (tree.segments.distal_x[ci] - tree.segments.proximal_x[ci])
+                by = tree.segments.proximal_y[ci] + ti * (tree.segments.distal_y[ci] - tree.segments.proximal_y[ci])
+                bz = tree.segments.proximal_z[ci] + ti * (tree.segments.distal_z[ci] - tree.segments.proximal_z[ci])
+
+                parent_r = tree.segments.radius[ci]
+                intersect_dist = max(parent_r * 2.0, d_thresh * 0.01)
+                check_intersections!(buf.intersect, tree.segments, bx, by, bz, tx, ty, tz, intersect_dist, n)
+
+                # Exclude topological neighbors
+                buf.intersect[ci] = false
+                topo = tree.topology
+                pp = topo.parent_id[ci]
+                if pp > 0
+                    buf.intersect[pp] = false
+                    for c in (topo.child1_id[pp], topo.child2_id[pp], topo.child3_id[pp])
+                        c > 0 && (buf.intersect[c] = false)
+                    end
+                end
+                for c in (topo.child1_id[ci], topo.child2_id[ci], topo.child3_id[ci])
+                    c > 0 && (buf.intersect[c] = false)
+                end
+
+                has_any_intersection(buf.intersect, n) && continue
+                check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz)) && continue
+
+                best_cost = costi
+                seg_idx = ci
+                t_opt = ti
+                found = true
+            end
+
+            !found && continue
+
+            n_before = tree.segments.n
 
             # Add bifurcation
             cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radius)
@@ -290,6 +345,13 @@ function generate_coronary_forest(
             end
 
             update_radii!(tree, gamma)
+
+            # Insert new segments into grid
+            _insert_segment_to_grid!(grid, tree.segments, seg_idx)
+            for new_seg_idx in (n_before + 1):tree.segments.n
+                _insert_segment_to_grid!(grid, tree.segments, new_seg_idx)
+            end
+
             added[cfg.name] += 1
         end
 
