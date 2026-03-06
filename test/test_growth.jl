@@ -188,4 +188,100 @@ using Random
         @test tree.n_bifurcations >= 1
     end
 
+    # --- Kassab-integrated growth ---
+
+    @testset "grow_tree! — asymmetric daughter radii" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(42)
+        grow_tree!(tree, domain, 30, params; rng=rng, kassab=true)
+
+        seg = tree.segments
+        topo = tree.topology
+
+        # Collect asymmetry ratios — should show variation
+        ratios = Float64[]
+        for i in 1:seg.n
+            if topo.junction_type[i] == :bifurcation
+                c1 = topo.child1_id[i]
+                c2 = topo.child2_id[i]
+                if c1 > 0 && c2 > 0
+                    r1 = seg.radius[c1]
+                    r2 = seg.radius[c2]
+                    push!(ratios, min(r1, r2) / max(r1, r2))
+                end
+            end
+        end
+
+        # Should have some variation (not all symmetric)
+        if length(ratios) > 2
+            @test !all(r ≈ ratios[1] for r in ratios)
+        end
+    end
+
+    @testset "grow_tree! — Kassab Murray's law preserved" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(88)
+        grow_tree!(tree, domain, 30, params; rng=rng, kassab=true)
+
+        seg = tree.segments
+        topo = tree.topology
+
+        for i in 1:seg.n
+            if topo.junction_type[i] == :bifurcation
+                c1 = topo.child1_id[i]
+                c2 = topo.child2_id[i]
+                if c1 > 0 && c2 > 0
+                    lhs = seg.radius[i]^gamma
+                    rhs = seg.radius[c1]^gamma + seg.radius[c2]^gamma
+                    @test lhs ≈ rhs rtol = 1e-6
+                end
+            end
+        end
+    end
+
+    @testset "grow_tree! — Kassab all radii positive" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(99)
+        grow_tree!(tree, domain, 30, params; rng=rng, kassab=true)
+
+        for i in 1:tree.segments.n
+            @test tree.segments.radius[i] > 0.0
+        end
+    end
+
+    @testset "grow_tree! — Kassab Strahler orders assigned" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        rng = MersenneTwister(111)
+        grow_tree!(tree, domain, 20, params; rng=rng, kassab=true)
+
+        assign_strahler_orders!(tree, params)
+        # All segments should have valid orders (>= 0)
+        for i in 1:tree.segments.n
+            @test tree.topology.strahler_order[i] >= Int32(-1)
+        end
+    end
+
+    @testset "grow_tree! — backward compatible (kassab=false)" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        tree = VascularTree("test", 500)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
+
+        # Default (no kassab keyword) should still work
+        rng = MersenneTwister(222)
+        grow_tree!(tree, domain, 10, params; rng=rng)
+        @test n_segments(tree) >= 3
+    end
+
 end

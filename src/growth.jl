@@ -112,9 +112,12 @@ function sample_terminal_candidate(
 end
 
 """
-    grow_tree!(tree, domain, n_terminals, params; rng=Random.default_rng(), verbose=false)
+    grow_tree!(tree, domain, n_terminals, params; rng=Random.default_rng(), verbose=false, kassab=false)
 
 Main CCO growth loop. Adds `n_terminals` terminal segments to the tree.
+
+When `kassab=true`, uses Kassab asymmetry sampling for daughter radii instead
+of symmetric bifurcations.
 
 The tree must have a root segment already added before calling this function.
 """
@@ -125,6 +128,7 @@ function grow_tree!(
     params::MorphometricParams;
     rng::AbstractRNG=Random.default_rng(),
     verbose::Bool=false,
+    kassab::Bool=false,
 )
     capacity = tree.segments.capacity
     gamma = params.gamma
@@ -195,6 +199,16 @@ function grow_tree!(
 
         # Add bifurcation
         cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radius)
+
+        if kassab
+            # Kassab-constrained: sample asymmetry and set daughter radii
+            parent_radius = tree.segments.radius[seg_idx]
+            asymmetry = sample_asymmetry(params, rng)
+            r_large, r_small = compute_daughter_radii(parent_radius, asymmetry, gamma)
+            # Continuation segment gets larger radius, new terminal gets smaller
+            tree.segments.radius[cont_id] = r_large
+            tree.segments.radius[new_id] = r_small
+        end
 
         # Update radii via Murray's law
         update_radii!(tree, gamma)

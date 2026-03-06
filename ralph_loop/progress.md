@@ -274,3 +274,16 @@
   - constrain_connectivity! adjusts daughter radius to mean diameter of nearest valid order
   - Chisq distribution from Distributions.jl used for p-value computation
 - Next: VESSEL-1016 (Kassab: Integrated constraint enforcement in growth loop)
+
+### 2026-03-05: VESSEL-1016 [PASS]
+- Attempted: Integrate Kassab constraints into CCO growth loop
+- Result: 40 new tests pass (3994 total), P4 Kassab Constraints milestone complete
+- Regression gate: 3994 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/growth.jl — grow_tree! gains kassab=true keyword for asymmetric daughter radii
+  - test/test_growth.jl — 5 new testsets for Kassab-integrated growth
+- Learning:
+  - Simple approach: sample asymmetry per bifurcation, assign r_large to continuation, r_small to new terminal
+  - Murray's law update_radii! at end ensures consistency regardless of initial assignment
+  - Backward compatible: kassab=false (default) preserves old behavior
+- Next: VESSEL-1017 (Barabasi: Chi/rho parameters + junction geometry)
