@@ -112,6 +112,51 @@ function _random_daughter_direction(
 end
 
 """
+    _cm_implied_asymmetry(d_order, parent_order, params, rng) -> Float64
+
+Compute asymmetry ratio (r_small/r_large) from Kassab element diameters.
+Uses D_elem(daughter)/D_elem(parent) as mean, with noise derived from
+the empirical coefficient of variation of both diameter distributions.
+
+This replaces the generic Beta(2.5, 0.8) with order-specific ratios
+grounded in Kassab 1993 Table 1 element data.
+"""
+function _cm_implied_asymmetry(
+    d_order::Int, parent_order::Int,
+    params::MorphometricParams, rng::AbstractRNG,
+)
+    d_idx = d_order + 1
+    p_idx = parent_order + 1
+    # Bounds check — fall back to generic 0.5 if out of range
+    if d_idx < 1 || d_idx > length(params.diameter_mean_elem) ||
+       p_idx < 1 || p_idx > length(params.diameter_mean_elem)
+        return 0.5
+    end
+
+    d_mean = params.diameter_mean_elem[d_idx]
+    p_mean = params.diameter_mean_elem[p_idx]
+    d_sd = params.diameter_sd_elem[d_idx]
+    p_sd = params.diameter_sd_elem[p_idx]
+
+    # Mean asymmetry = daughter_diameter / parent_diameter
+    mean_asym = d_mean / p_mean
+
+    # Propagate uncertainty: CV_ratio = sqrt(CV_d^2 + CV_p^2)
+    cv_d = d_sd / max(d_mean, 1e-10)
+    cv_p = p_sd / max(p_mean, 1e-10)
+    cv_ratio = sqrt(cv_d^2 + cv_p^2)
+
+    # Sample with truncated Normal noise
+    for _ in 1:10
+        asym = mean_asym * (1.0 + cv_ratio * randn(rng))
+        if asym > 0.02 && asym < 0.99
+            return asym
+        end
+    end
+    return clamp(mean_asym, 0.02, 0.99)
+end
+
+"""
     _sample_segment_length(order, params, rng) -> Float64
 
 Sample segment length (mm) from per-order distribution. Uses truncated Normal
@@ -141,8 +186,8 @@ using Kassab's connectivity matrix. Uses bifurcation chains: each daughter
 peeled off creates a proper bifurcation with a continuation segment, producing
 trees with 100% bifurcations (no cascade stubs).
 
-Asymmetry is baked in: at each bifurcation, Murray's law with sampled asymmetry
-determines daughter radii. No post-hoc radius assignment needed.
+Asymmetry is baked in: at each bifurcation, CM-implied asymmetry from
+Kassab element diameters determines daughter radii via Murray's law.
 """
 function subdivide_terminals!(
     tree::VascularTree,
@@ -234,10 +279,10 @@ function _subdivide_recursive!(
         d_order = daughters[i]
         r_parent = seg.radius[current_parent]
 
-        # Sample asymmetry and compute radii via Murray's law
+        # CM-implied asymmetry: D_elem(daughter)/D_elem(parent) with noise
+        # Grounded in Kassab 1993 element diameters, not generic Beta distribution.
         # No floor clamp: Murray's law holds exactly at every junction.
-        # Sub-capillary radii are fine — order-0 terminals won't be further subdivided.
-        asymmetry = sample_asymmetry(params, rng)
+        asymmetry = _cm_implied_asymmetry(d_order, parent_order, params, rng)
         r_large, r_small = compute_daughter_radii(r_parent, asymmetry, gamma)
 
         # Daughter (branch) gets the small radius; continuation gets the large radius
