@@ -1,0 +1,20 @@
+module VesselTree
+
+import AcceleratedKernels as AK
+using LinearAlgebra
+using Random
+using Distributions
+using StaticArrays
+
+# Scientific constants
+const MURRAY_GAMMA = 7 / 3           # Huo-Kassab 2007 (NOT 3.0)
+const VESSEL_CUTOFF_UM = 8.0         # Capillary diameter (um)
+const BLOOD_VISCOSITY = 0.0035       # Pa*s (3.5 cP)
+const ROOT_PRESSURE = 13332.0        # Pa (100 mmHg)
+const TERMINAL_PRESSURE = 3999.6     # Pa (30 mmHg)
+const TRIFURCATION_CHI_TH = 0.83     # Barabasi 2026
+const SPROUTING_RHO_TH = 0.83        # Barabasi 2026
+const ASYMMETRY_ALPHA = 2.5          # Beta distribution parameter
+const ASYMMETRY_BETA = 0.8           # Beta distribution parameter
+
+end # module VesselTree

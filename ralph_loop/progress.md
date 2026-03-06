@@ -94,3 +94,18 @@
   - Junction surfaces modeled via "pants decomposition" of tube cross-sections
   - All real networks are ~25% longer than Steiner-optimal (surface cost penalty)
 - Next: VESSEL-1004 (Project setup: Package skeleton with AK.jl) — all P0 discovery complete
+
+### 2026-03-05: VESSEL-1004 [PASS]
+- Attempted: Create Julia package skeleton with AcceleratedKernels.jl and scientific constants
+- Result: Package loads, 21 tests pass, CLAUDE.md created
+- Regression gate: 21 tests pass, 0 fail, 0 error
+- Files created:
+  - Project.toml — deps: AcceleratedKernels 0.4, Distributions 0.25, StaticArrays 1, LinearAlgebra, Random
+  - src/VesselTree.jl — module with 9 scientific constants (MURRAY_GAMMA=7/3, VESSEL_CUTOFF_UM=8.0, etc.)
+  - test/runtests.jl — 3 testsets: module loading (3), scientific constants (12), AK availability (6)
+  - CLAUDE.md — project context, conventions, AK gotchas, scientific constants
+- Learning:
+  - AK does not support BitVector — must convert to Vector{Bool} before passing to AK.any/all
+  - Correct AcceleratedKernels UUID is 6a4ca0a5-0e36-4168-a932-d9be78d558f1 (not the one in General registry search)
+  - `import AcceleratedKernels as AK` pattern works well for namespacing
+- Next: VESSEL-1005 (Core types: SoA segment storage + tree topology)
