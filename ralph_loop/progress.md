@@ -157,3 +157,16 @@
   - Zero-length segment handling: degenerate case returns distance to the single point
   - All 6 geometric cases (on-segment, proximal, distal, perpendicular, behind, beyond) verified
 - Next: VESSEL-1008 (AK-accelerated intersection testing)
+
+### 2026-03-05: VESSEL-1008 [PASS]
+- Attempted: Implement AK-accelerated segment-segment intersection testing
+- Result: 1018 new tests pass (2563 total), all acceptance criteria met
+- Regression gate: 2563 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/intersection.jl — segments_min_distance_sq, segments_intersect, check_intersections! (AK.foreachindex), has_any_intersection (AK.any), check_domain_crossing
+  - test/test_intersection.jl — 14 testsets with 1018 tests
+- Learning:
+  - Closest-point-on-two-segments algorithm handles all degenerate cases (parallel, collinear, zero-length)
+  - AK.any(identity, bool_view) works correctly for intersection reduction
+  - check_domain_crossing samples interior points (not endpoints) to detect boundary crossing
+- Next: VESSEL-1009 (Kamiya bifurcation point optimization)

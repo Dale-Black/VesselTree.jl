@@ -11,7 +11,7 @@
   "milestones": {
     "P0": { "name": "Discovery", "stories": 4, "done": 4 },
     "P1": { "name": "Foundation", "stories": 3, "done": 3 },
-    "P2": { "name": "CCO Engine", "stories": 5, "done": 1 },
+    "P2": { "name": "CCO Engine", "stories": 5, "done": 2 },
     "P3": { "name": "Hemodynamics", "stories": 2, "done": 0 },
     "P4": { "name": "Kassab Constraints", "stories": 3, "done": 0 },
     "P5": { "name": "Barabasi Geometry", "stories": 3, "done": 0 },
@@ -184,7 +184,8 @@
       "id": "VESSEL-1008",
       "title": "AK-accelerated intersection testing",
       "type": "IMPL",
-      "status": "open",
+      "status": "done",
+      "completedNote": "Scalar segments_min_distance_sq for all geometric cases (crossing, parallel, skew, collinear, zero-length). AK-accelerated check_intersections! using foreachindex. has_any_intersection via AK.any. check_domain_crossing for sphere/ellipsoid boundary detection. Verified AK matches scalar loop on 1000 segments. 1018 intersection tests (2563 total).",
       "priority": 2,
       "milestone": "P2",
       "blockedBy": ["VESSEL-1005"],
