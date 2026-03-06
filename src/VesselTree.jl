@@ -65,5 +65,6 @@ export sample_in_territory, check_inter_tree_collision, coronary_tree_configs
 export estimate_total_segments, estimate_subdivision_capacity, subdivide_terminals!
 export CoronaryForest, generate_coronary_forest, generate_kassab_coronary, validate_forest
 export save_tree, load_tree, export_centerlines_vtp, export_forest_vtp
+export export_stl, export_graph_json, export_csv
 
 end # module VesselTree

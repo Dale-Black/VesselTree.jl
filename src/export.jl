@@ -1,4 +1,4 @@
-# JLD2 persistence and VTP export
+# JLD2 persistence, VTP export, STL mesh, graph JSON, CSV
 
 """
     save_tree(filename, tree::VascularTree)
@@ -135,4 +135,217 @@ function export_forest_vtp(forest::CoronaryForest, directory::AbstractString)
         push!(paths, export_centerlines_vtp(tree, filepath))
     end
     return paths
+end
+
+"""
+    export_stl(tree::VascularTree, filename; circumferential_resolution=16)
+
+Export tree as binary STL mesh. Each segment becomes a cylinder approximated
+by `circumferential_resolution` facets. Vertex generation uses AK kernel.
+"""
+function export_stl(tree::VascularTree, filename::AbstractString; circumferential_resolution::Int=16)
+    n = tree.segments.n
+    seg = tree.segments
+    nf = circumferential_resolution  # facets around circumference
+    # Each segment produces 2*nf triangles (nf quads = 2*nf tris)
+    total_triangles = 2 * nf * n
+
+    # Pre-allocate vertex ring buffers: for each segment, compute nf vertices at each end
+    # Using AK for bulk angle computation
+    angles = zeros(nf)
+    AK.foreachindex(angles) do j
+        angles[j] = 2.0 * Float64(π) * (j - 1) / nf
+    end
+    cos_angles = cos.(angles)
+    sin_angles = sin.(angles)
+
+    # Write binary STL
+    open(filename, "w") do io
+        # 80-byte header
+        header = zeros(UInt8, 80)
+        hdr = "VesselTree STL"
+        copyto!(header, 1, Vector{UInt8}(hdr), 1, length(hdr))
+        write(io, header)
+        # Number of triangles
+        write(io, UInt32(total_triangles))
+
+        for i in 1:n
+            px, py, pz = seg.proximal_x[i], seg.proximal_y[i], seg.proximal_z[i]
+            dx, dy, dz = seg.distal_x[i], seg.distal_y[i], seg.distal_z[i]
+            r = seg.radius[i]
+
+            # Segment axis
+            ax = dx - px; ay = dy - py; az = dz - pz
+            alen = sqrt(ax^2 + ay^2 + az^2)
+            if alen < 1e-15
+                ax, ay, az = 1.0, 0.0, 0.0
+                alen = 1.0
+            end
+            ax /= alen; ay /= alen; az /= alen
+
+            # Two orthonormal vectors perpendicular to axis
+            u1, u2, u3 = _find_perpendicular(ax, ay, az)
+            v1 = ay * u3 - az * u2
+            v2 = az * u1 - ax * u3
+            v3 = ax * u2 - ay * u1
+
+            # Generate ring vertices at proximal and distal ends
+            for j in 1:nf
+                j2 = j % nf + 1
+                c1, s1 = cos_angles[j], sin_angles[j]
+                c2, s2 = cos_angles[j2], sin_angles[j2]
+
+                # 4 vertices of the quad
+                p1x = px + r * (c1 * u1 + s1 * v1)
+                p1y = py + r * (c1 * u2 + s1 * v2)
+                p1z = pz + r * (c1 * u3 + s1 * v3)
+
+                p2x = px + r * (c2 * u1 + s2 * v1)
+                p2y = py + r * (c2 * u2 + s2 * v2)
+                p2z = pz + r * (c2 * u3 + s2 * v3)
+
+                d1x = dx + r * (c1 * u1 + s1 * v1)
+                d1y = dy + r * (c1 * u2 + s1 * v2)
+                d1z = dz + r * (c1 * u3 + s1 * v3)
+
+                d2x = dx + r * (c2 * u1 + s2 * v1)
+                d2y = dy + r * (c2 * u2 + s2 * v2)
+                d2z = dz + r * (c2 * u3 + s2 * v3)
+
+                # Triangle 1: p1, d1, p2
+                _write_stl_triangle(io, p1x, p1y, p1z, d1x, d1y, d1z, p2x, p2y, p2z)
+                # Triangle 2: p2, d1, d2
+                _write_stl_triangle(io, p2x, p2y, p2z, d1x, d1y, d1z, d2x, d2y, d2z)
+            end
+        end
+    end
+    return filename
+end
+
+function _write_stl_triangle(io::IO,
+    ax, ay, az, bx, by, bz, cx, cy, cz)
+    # Compute normal
+    e1x = bx - ax; e1y = by - ay; e1z = bz - az
+    e2x = cx - ax; e2y = cy - ay; e2z = cz - az
+    nx = e1y * e2z - e1z * e2y
+    ny = e1z * e2x - e1x * e2z
+    nz = e1x * e2y - e1y * e2x
+    nlen = sqrt(nx^2 + ny^2 + nz^2)
+    if nlen > 0
+        nx /= nlen; ny /= nlen; nz /= nlen
+    end
+    write(io, Float32(nx), Float32(ny), Float32(nz))
+    write(io, Float32(ax), Float32(ay), Float32(az))
+    write(io, Float32(bx), Float32(by), Float32(bz))
+    write(io, Float32(cx), Float32(cy), Float32(cz))
+    write(io, UInt16(0))  # attribute byte count
+end
+
+"""
+    export_graph_json(tree::VascularTree, filename)
+
+Export tree topology as JSON graph with nodes (bifurcations + terminals) and
+edges (segments with length, radius, flow, order).
+"""
+function export_graph_json(tree::VascularTree, filename::AbstractString)
+    n = tree.segments.n
+    seg = tree.segments
+    topo = tree.topology
+
+    # Build node and edge lists
+    nodes = []
+    edges = []
+
+    for i in 1:n
+        # Each segment's distal point is a node
+        push!(nodes, Dict(
+            "id" => i,
+            "x" => seg.distal_x[i],
+            "y" => seg.distal_y[i],
+            "z" => seg.distal_z[i],
+            "radius" => seg.radius[i],
+            "is_terminal" => topo.is_terminal[i],
+            "strahler_order" => Int(topo.strahler_order[i]),
+            "junction_type" => String(topo.junction_type[i]),
+        ))
+
+        push!(edges, Dict(
+            "id" => i,
+            "source" => Int(topo.parent_id[i]),
+            "target" => i,
+            "length" => seg.seg_length[i],
+            "radius" => seg.radius[i],
+            "flow" => seg.flow[i],
+            "strahler_order" => Int(topo.strahler_order[i]),
+        ))
+    end
+
+    graph = Dict("nodes" => nodes, "edges" => edges, "name" => tree.name, "n_segments" => n)
+
+    open(filename, "w") do io
+        # Simple JSON serialization (no external JSON dependency)
+        _write_json(io, graph)
+    end
+    return filename
+end
+
+function _write_json(io::IO, obj::Dict)
+    write(io, "{")
+    pairs = collect(obj)
+    for (idx, (k, v)) in enumerate(pairs)
+        write(io, "\"", string(k), "\":")
+        _write_json(io, v)
+        idx < length(pairs) && write(io, ",")
+    end
+    write(io, "}")
+end
+
+function _write_json(io::IO, arr::AbstractVector)
+    write(io, "[")
+    for (idx, v) in enumerate(arr)
+        _write_json(io, v)
+        idx < length(arr) && write(io, ",")
+    end
+    write(io, "]")
+end
+
+function _write_json(io::IO, s::AbstractString)
+    write(io, "\"", s, "\"")
+end
+
+function _write_json(io::IO, b::Bool)
+    write(io, b ? "true" : "false")
+end
+
+function _write_json(io::IO, x::Number)
+    write(io, string(x))
+end
+
+"""
+    export_csv(tree::VascularTree, filename)
+
+Export all segments as a flat CSV for spreadsheet analysis.
+"""
+function export_csv(tree::VascularTree, filename::AbstractString)
+    n = tree.segments.n
+    seg = tree.segments
+    topo = tree.topology
+
+    open(filename, "w") do io
+        println(io, "id,proximal_x,proximal_y,proximal_z,distal_x,distal_y,distal_z,radius,length,flow,pressure_proximal,pressure_distal,resistance,parent_id,child1_id,child2_id,child3_id,strahler_order,generation,is_terminal,junction_type")
+        for i in 1:n
+            println(io,
+                i, ",",
+                seg.proximal_x[i], ",", seg.proximal_y[i], ",", seg.proximal_z[i], ",",
+                seg.distal_x[i], ",", seg.distal_y[i], ",", seg.distal_z[i], ",",
+                seg.radius[i], ",", seg.seg_length[i], ",",
+                seg.flow[i], ",", seg.pressure_proximal[i], ",", seg.pressure_distal[i], ",",
+                seg.resistance[i], ",",
+                topo.parent_id[i], ",", topo.child1_id[i], ",", topo.child2_id[i], ",", topo.child3_id[i], ",",
+                topo.strahler_order[i], ",", topo.generation[i], ",",
+                topo.is_terminal[i], ",", topo.junction_type[i],
+            )
+        end
+    end
+    return filename
 end

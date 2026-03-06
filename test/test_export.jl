@@ -110,4 +110,100 @@ using Random
         end
     end
 
+    # --- STL mesh export ---
+
+    @testset "export_stl — creates valid binary STL" begin
+        tree = VascularTree("stl_test", 100)
+        add_segment!(tree, (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), 1.0, Int32(-1))
+        add_segment!(tree, (10.0, 0.0, 0.0), (15.0, 1.0, 0.0), 0.5, Int32(1))
+        add_segment!(tree, (10.0, 0.0, 0.0), (15.0, -1.0, 0.0), 0.3, Int32(1))
+
+        tmpfile = tempname() * ".stl"
+        try
+            outpath = export_stl(tree, tmpfile)
+            @test isfile(outpath)
+            # Binary STL: 80 header + 4 bytes triangle count + 50 bytes per triangle
+            n_segs = 3
+            nf = 16  # default circumferential_resolution
+            expected_triangles = 2 * nf * n_segs
+            expected_size = 80 + 4 + 50 * expected_triangles
+            @test filesize(outpath) == expected_size
+
+            # Verify triangle count in header
+            data = read(outpath)
+            tri_count = reinterpret(UInt32, data[81:84])[1]
+            @test tri_count == expected_triangles
+        finally
+            isfile(tmpfile) && rm(tmpfile)
+        end
+    end
+
+    @testset "export_stl — custom resolution" begin
+        tree = VascularTree("stl_res", 100)
+        add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 0.5, Int32(-1))
+
+        tmpfile = tempname() * ".stl"
+        try
+            export_stl(tree, tmpfile; circumferential_resolution=8)
+            data = read(tmpfile)
+            tri_count = reinterpret(UInt32, data[81:84])[1]
+            @test tri_count == 2 * 8 * 1  # 2 tris per facet * 8 facets * 1 segment
+        finally
+            isfile(tmpfile) && rm(tmpfile)
+        end
+    end
+
+    # --- Graph JSON export ---
+
+    @testset "export_graph_json — valid JSON structure" begin
+        tree = VascularTree("json_test", 100)
+        add_segment!(tree, (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), 1.0, Int32(-1))
+        add_segment!(tree, (10.0, 0.0, 0.0), (15.0, 1.0, 0.0), 0.5, Int32(1))
+
+        tmpfile = tempname() * ".json"
+        try
+            export_graph_json(tree, tmpfile)
+            @test isfile(tmpfile)
+            content = read(tmpfile, String)
+            # Basic JSON structure checks
+            @test startswith(content, "{")
+            @test endswith(content, "}")
+            @test occursin("\"nodes\"", content)
+            @test occursin("\"edges\"", content)
+            @test occursin("\"name\"", content)
+            @test occursin("json_test", content)
+            @test occursin("\"n_segments\"", content)
+        finally
+            isfile(tmpfile) && rm(tmpfile)
+        end
+    end
+
+    # --- CSV export ---
+
+    @testset "export_csv — valid CSV with headers" begin
+        tree = VascularTree("csv_test", 100)
+        add_segment!(tree, (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), 1.0, Int32(-1))
+        add_segment!(tree, (10.0, 0.0, 0.0), (15.0, 1.0, 0.0), 0.5, Int32(1))
+        add_segment!(tree, (10.0, 0.0, 0.0), (15.0, -1.0, 0.0), 0.3, Int32(1))
+
+        tmpfile = tempname() * ".csv"
+        try
+            export_csv(tree, tmpfile)
+            @test isfile(tmpfile)
+            lines = readlines(tmpfile)
+            @test length(lines) == 4  # header + 3 segments
+            # Check header
+            @test startswith(lines[1], "id,proximal_x")
+            @test occursin("radius", lines[1])
+            @test occursin("strahler_order", lines[1])
+            # Check data rows have correct number of columns
+            header_cols = length(split(lines[1], ","))
+            for row in lines[2:end]
+                @test length(split(row, ",")) == header_cols
+            end
+        finally
+            isfile(tmpfile) && rm(tmpfile)
+        end
+    end
+
 end

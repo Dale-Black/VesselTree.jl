@@ -541,3 +541,21 @@
   - WriteVTK MeshCell(PolyData.Lines(), [i1, i2]) creates line cells for centerlines
   - vtk_grid do-block syntax handles file writing and returns output paths
 - Next: VESSEL-1025 (Makie visualization) or VESSEL-1026 (STL mesh + graph export)
+
+### 2026-03-06: VESSEL-1026 [PASS]
+- Attempted: Implement STL mesh export, graph JSON export, and CSV export
+- Result: 20 new tests pass (21196 total), all acceptance criteria met
+- Regression gate: 21196 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/export.jl — export_stl (binary STL with AK angle computation), export_graph_json (hand-rolled JSON), export_csv
+  - src/VesselTree.jl — new exports
+  - test/test_export.jl — 4 new testsets: STL valid binary, STL custom resolution, graph JSON structure, CSV headers+rows
+- Features:
+  - export_stl: binary STL with configurable circumferential_resolution (default 16); each segment → cylinder mesh; AK.foreachindex for angle precomputation; reuses _find_perpendicular from barabasi.jl
+  - export_graph_json: nodes (distal points with radius/order/junction_type) + edges (segments with source/target/length/flow); hand-rolled JSON serializer (no JSON.jl dependency)
+  - export_csv: flat CSV with 21 columns covering all segment attributes
+- Learning:
+  - _find_perpendicular takes 3 separate Float64 args, not a tuple — caught by tests
+  - Binary STL format: 80-byte header + 4-byte uint32 triangle count + 50 bytes per triangle (normal + 3 vertices + 2-byte attribute)
+  - Hand-rolled JSON avoids adding a dependency; works for simple nested Dict/Array structures
+- Next: VESSEL-1025 (Makie visualization) or VESSEL-1027 (End-to-end demo)
