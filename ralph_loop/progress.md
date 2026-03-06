@@ -244,3 +244,18 @@
   - AK.foreachindex used for pairwise terminal distance computation; AK.minimum for nn lookup
   - Flow-weighted pipeline: assign_terminal_flows! → recompute_radii_from_flow! → compute_resistances! → compute_flows! → compute_pressures!
 - Next: VESSEL-1014 (Kassab: Strahler ordering + asymmetry sampling)
+
+### 2026-03-05: VESSEL-1014 [PASS]
+- Attempted: Implement Kassab Strahler ordering, asymmetry sampling, daughter radii computation
+- Result: 438 new tests pass (3930 total), all acceptance criteria met
+- Regression gate: 3930 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/kassab.jl — assign_strahler_orders! (AK kernel), sample_asymmetry, compute_daughter_radii, apply_kassab_radii!
+  - test/test_kassab.jl — 14 testsets with 438 tests (including 200-segment AK verification and KS distribution test)
+  - src/VesselTree.jl — include + exports
+- Learning:
+  - AK.foreachindex works for Strahler ordering: classify_order loop inside kernel closure works correctly
+  - Beta(2.5, 0.8) theoretical median is ~0.812, not 0.76 (Kassab's empirical median from the paper)
+  - apply_kassab_radii! does top-down asymmetry assignment then bottom-up Murray's law propagation
+  - compute_daughter_radii: r_large = r_parent / (1 + asymmetry^gamma)^(1/gamma)
+- Next: VESSEL-1015 (Kassab: Connectivity matrix validation)

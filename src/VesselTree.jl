@@ -27,6 +27,7 @@ include("murray.jl")
 include("spatial.jl")
 include("growth.jl")
 include("hemodynamics.jl")
+include("kassab.jl")
 
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
@@ -44,5 +45,6 @@ export update_radii!, grow_tree!, add_bifurcation!
 export SpatialGrid, build_grid, query_nearby
 export compute_resistances!, compute_flows!, compute_pressures!, validate_hemodynamics
 export assign_terminal_flows!, recompute_radii_from_flow!
+export assign_strahler_orders!, sample_asymmetry, compute_daughter_radii, apply_kassab_radii!
 
 end # module VesselTree
