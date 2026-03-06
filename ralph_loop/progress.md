@@ -707,3 +707,95 @@
   4. New test file: test_strahler_jiang.jl (124 tests)
 - Converges in 3-5 iterations on CCO trees
 - Next: VESSEL-1037 (Implement element grouping)
+
+### 2026-03-06: VESSEL-1037 [PASS]
+- Attempted: Implement element grouping and element-level statistics
+- Result: 23452 tests passing (was 23157)
+- Regression gate: 23452 tests pass (min 21150)
+- Files created/modified:
+  - src/elements.jl — ElementData struct, group_into_elements, build_element_connectivity, compute_element_statistics, compute_se_ratios
+  - test/test_elements.jl — 18 testsets (hand-built trees, CCO trees, subdivided trees, S/E reference comparison)
+  - src/VesselTree.jl — include + exports
+  - test/runtests.jl — include test_elements.jl
+- Learning:
+  - Element continuation detection: a segment continues its parent's element only when it is the sole same-order child
+  - When parent has 2 children of same order (e.g., symmetric bifurcation), neither continues → each starts new element
+  - Element-level CM divides daughter counts by number of parent elements per order (normalization)
+  - S/E ratio validation against Kassab Table 5 depends on subdivision quality (VESSEL-1038)
+- Next: VESSEL-1038 (Fix subdivision to produce correct bifurcation-only trees)
+
+### 2026-03-06: VESSEL-1038 [PASS]
+- Attempted: Fix subdivision to produce clean bifurcation-only trees
+- Result: 44700 tests passing (was 23452)
+- Regression gate: 44700 tests pass (min 21200)
+- Files modified:
+  - src/subdivision.jl — Complete rewrite of _subdivide_recursive!: bifurcation chains instead of cascade stubs
+  - test/test_subdivision.jl — Updated tests + 4 new testsets (no trifurcations, Murray exact, S/E ratios, asymmetry)
+- Key changes:
+  1. Bifurcation chains: each daughter peeled off via proper 2-child bifurcation with continuation segment
+  2. Asymmetry baked in: Murray's law with Beta-sampled asymmetry at every junction (0% deviation)
+  3. No floor clamp: removed min_radius that violated Murray's law
+  4. Updated estimate_total_segments to account for continuation segments (each daughter = 2 new segments)
+  5. S/E ratios emerge naturally from chains (S/E = N+1 for N daughters)
+- Learning:
+  - Floor clamp at min_radius violates Murray's law when parent is already near minimum
+  - Without floor clamp, Murray's law holds exactly (r_parent^gamma = r_c1^gamma + r_c2^gamma)
+  - Test count nearly doubled (23452 → 44700) because bifurcation chains produce more segments, expanding loop-based tests
+  - Sort daughters ascending (smallest order first) for most asymmetric peeling
+- Next: VESSEL-1039 (Fix asymmetry to match Kassab empirical distribution)
+
+### 2026-03-06: VESSEL-1039 [PASS]
+- Attempted: Replace generic Beta(2.5,0.8) asymmetry with CM-implied order-dependent asymmetry
+- Result: 35886 tests passing (test count decreased vs previous because new asymmetry ratios produce different tree sizes)
+- Regression gate: all tests pass
+- Files modified:
+  - src/subdivision.jl — New _cm_implied_asymmetry() function; replaces sample_asymmetry() in _subdivide_recursive!
+  - test/test_asymmetry.jl — 11 testsets, 1327 tests for asymmetry validation
+  - test/runtests.jl — Added test_asymmetry.jl
+- Key changes:
+  1. Asymmetry = D_elem(daughter_order) / D_elem(parent_order) from Kassab 1993 Table 1
+  2. Noise from propagated CV: cv_ratio = sqrt(cv_d^2 + cv_p^2), applied as multiplicative Normal
+  3. Produces realistic ratios: 0.15 (order 0/5) to 0.86 (order 0/1)
+  4. Element-level median asymmetry now < 0.80 (was 0.875 with Beta distribution)
+  5. Murray's law still exact (< 1% deviation) at all new junctions
+  6. All three artery types (RCA/LAD/LCX) work correctly
+- Asymmetry source: Kassab 1993 Table 1 element-level diameter means and SDs
+- Learning:
+  - Beta(2.5, 0.8) was unsourced — no Kassab paper provides this distribution
+  - CM-implied asymmetry is more physical: it uses the actual measured element diameters
+  - Order-dependent asymmetry naturally produces the range of vessel size ratios seen in real vasculature
+- Next: VESSEL-1040 (Update validation framework for element-level Kassab metrics)
+
+### 2026-03-06: VESSEL-1040 [PASS]
+- Attempted: Overhaul validation framework for element-level Kassab metrics
+- Result: 36083 tests passing (was 35886)
+- Regression gate: all tests pass
+- Files modified:
+  - src/validation.jl — Element-level diameter/length KS, element CM, S/E ratios, element counts, trifurcation %, 9-metric report card
+  - src/VesselTree.jl — New exports: validate_element_counts, validate_se_ratios
+  - test/test_validation_kassab.jl — 15 new testsets for element-level validation
+- Key changes:
+  1. validate_diameters_per_order now defaults to element_level=true (uses Kassab Table 1 element data)
+  2. validate_lengths_per_order now defaults to element_level=true
+  3. Connectivity CM built from elements via build_element_connectivity
+  4. Asymmetry measured at element level (daughter/parent element diameters)
+  5. validate_se_ratios compares against Kassab Table 5
+  6. validate_element_counts compares against Kassab Table 9
+  7. generate_report_card has 9 metrics (was 6): diameter KS, length KS, connectivity, asymmetry, Murray, trifurcation, S/E ratios, element counts, orders populated
+  8. Backward compatible: element_level=false flag for segment-level validation
+- Next: VESSEL-1041 (Update forest pipeline for per-artery params)
+
+### 2026-03-06: VESSEL-1041 [PASS]
+- Attempted: Update forest pipeline for per-artery params
+- Result: 43557 tests passing (was 36083)
+- Files modified:
+  - src/forest.jl — Per-artery params auto-selection, removed apply_full_kassab_radii!, CoronaryForest.tree_params
+  - test/test_pipeline.jl — Updated diameter range test (sub-capillary radii allowed)
+  - test/test_validation_kassab.jl — Updated diameter comparison to use element-level reference
+- Key changes:
+  1. _params_for_tree() auto-selects RCA/LAD/LCX params by tree name
+  2. CoronaryForest now has tree_params Dict for per-artery validation
+  3. Phase 2 subdivision uses per-artery CM and element diameters
+  4. Phase 3 no longer calls apply_full_kassab_radii! (radii baked into subdivision)
+  5. validate_forest() uses per-tree params automatically
+- Next: VESSEL-1042 (Full Kassab parity validation)
