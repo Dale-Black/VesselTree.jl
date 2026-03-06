@@ -62,7 +62,8 @@ export compute_chi, compute_rho, classify_junction, compute_junction_angles, app
 export compute_trifurcation_angles, check_trifurcation_merge, merge_to_trifurcation!, apply_trifurcation_geometry!
 export ValidationReport, validate_tree, print_report
 export ks_test_onesample, validate_diameters_per_order, validate_lengths_per_order
-export validate_segment_counts, validate_asymmetry_ks, validate_connectivity_matrix
+export validate_segment_counts, validate_element_counts, validate_se_ratios
+export validate_asymmetry_ks, validate_connectivity_matrix
 export generate_report_card, print_report_card
 export TreeConfig, TerritoryMap, initialize_territories, query_territory
 export sample_in_territory, check_inter_tree_collision, coronary_tree_configs
