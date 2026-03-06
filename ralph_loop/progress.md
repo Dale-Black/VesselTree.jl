@@ -354,3 +354,18 @@
   - Approximate z-test p-value for diameter validation (full KS would need HypothesisTests.jl)
   - ValidationReport uses @kwdef for convenient construction
 - Next: VESSEL-1021 (Full validation suite: connectivity + trifurcation + P(lambda))
+
+### 2026-03-05: VESSEL-1021 [PASS]
+- Attempted: Complete validation suite with connectivity, trifurcation %, P(lambda), Murray deviation
+- Result: 51 new tests pass (4508 total), P6 Validation milestone complete
+- Regression gate: 4508 tests pass, 0 fail, 0 error
+- Files created/modified:
+  - src/validation.jl — compute_murray_deviation, compute_trifurcation_pct, compute_lambda_distribution, extra dict in ValidationReport, updated validate_tree and print_report
+  - test/test_validation_full.jl — 10 testsets with 51 tests
+  - test/runtests.jl — include test_validation_full.jl
+- Learning:
+  - validate_connectivity takes (empirical_matrix, reference_matrix) not (matrix, params)
+  - P(lambda) = min_daughter_length / (2*pi*r_parent) measures how close a junction is to trifurcation
+  - Murray deviation at all junctions after update_radii! is < 1e-6 as expected
+  - Extra metrics stored in Dict{Symbol, Any} for extensibility
+- Next: VESSEL-1022 (Territory partitioning + collision avoidance)

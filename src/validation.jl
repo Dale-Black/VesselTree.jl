@@ -26,6 +26,9 @@ Base.@kwdef mutable struct ValidationReport
     branching_angles::Vector{Float64} = Float64[]
     angle_mean::Float64 = 0.0
     angle_std::Float64 = 0.0
+
+    # Extra metrics (connectivity chi2, trifurcation %, Murray deviation, lambda)
+    extra::Dict{Symbol, Any} = Dict{Symbol, Any}()
 end
 
 """
@@ -127,6 +130,87 @@ function compute_branching_angles(tree::VascularTree)
 end
 
 """
+    compute_murray_deviation(tree, gamma) -> (max_dev, mean_dev)
+
+Compute Murray's law deviation at all bifurcations and trifurcations.
+Deviation = |r_parent^gamma - sum(r_child^gamma)| / r_parent^gamma.
+"""
+function compute_murray_deviation(tree::VascularTree, gamma::Float64)
+    topo = tree.topology
+    seg = tree.segments
+    n = seg.n
+    deviations = Float64[]
+
+    for i in 1:n
+        (topo.junction_type[i] != :bifurcation && topo.junction_type[i] != :trifurcation) && continue
+
+        r_parent_g = seg.radius[i]^gamma
+        r_parent_g <= 0.0 && continue
+
+        r_sum = 0.0
+        c1 = Int(topo.child1_id[i])
+        c2 = Int(topo.child2_id[i])
+        c3 = Int(topo.child3_id[i])
+        c1 > 0 && (r_sum += seg.radius[c1]^gamma)
+        c2 > 0 && (r_sum += seg.radius[c2]^gamma)
+        c3 > 0 && (r_sum += seg.radius[c3]^gamma)
+
+        dev = abs(r_parent_g - r_sum) / r_parent_g
+        push!(deviations, dev)
+    end
+
+    isempty(deviations) && return (0.0, 0.0)
+    return (maximum(deviations), sum(deviations) / length(deviations))
+end
+
+"""
+    compute_trifurcation_pct(tree) -> Float64
+
+Compute trifurcation percentage: n_trifurcations / (n_bifurcations + n_trifurcations) * 100.
+"""
+function compute_trifurcation_pct(tree::VascularTree)
+    total = tree.n_bifurcations + tree.n_trifurcations
+    total == 0 && return 0.0
+    return tree.n_trifurcations / total * 100.0
+end
+
+"""
+    compute_lambda_distribution(tree) -> Vector{Float64}
+
+Compute lambda = l / w for each junction, where:
+- l = minimum daughter segment length (distance between junction and nearest downstream node)
+- w = 2 * pi * r_parent (parent circumference)
+
+P(lambda -> 0) > 0 indicates stable trifurcations exist.
+"""
+function compute_lambda_distribution(tree::VascularTree)
+    topo = tree.topology
+    seg = tree.segments
+    n = seg.n
+    lambdas = Float64[]
+
+    for i in 1:n
+        (topo.junction_type[i] != :bifurcation && topo.junction_type[i] != :trifurcation) && continue
+
+        w = 2π * seg.radius[i]
+        w <= 0.0 && continue
+
+        # Minimum daughter length
+        min_len = Inf
+        c1 = Int(topo.child1_id[i])
+        c2 = Int(topo.child2_id[i])
+        c3 = Int(topo.child3_id[i])
+        c1 > 0 && (min_len = min(min_len, seg.seg_length[c1]))
+        c2 > 0 && (min_len = min(min_len, seg.seg_length[c2]))
+        c3 > 0 && (min_len = min(min_len, seg.seg_length[c3]))
+
+        min_len < Inf && push!(lambdas, min_len / w)
+    end
+
+    return lambdas
+end
+
+"""
     validate_tree(tree, params) -> ValidationReport
 
 Run all validation metrics on a generated tree.
@@ -204,6 +288,25 @@ function validate_tree(tree::VascularTree, params::MorphometricParams)
         end
     end
 
+    # --- Murray's law deviation ---
+    max_dev, mean_dev = compute_murray_deviation(tree, params.gamma)
+    report.extra[:murray_max_deviation] = max_dev
+    report.extra[:murray_mean_deviation] = mean_dev
+
+    # --- Trifurcation percentage ---
+    report.extra[:trifurcation_pct] = compute_trifurcation_pct(tree)
+
+    # --- P(lambda) distribution ---
+    lambdas = compute_lambda_distribution(tree)
+    report.extra[:lambda_values] = lambdas
+
+    # --- Connectivity chi-squared ---
+    # (strahler orders already assigned above)
+    cm_empirical = build_empirical_connectivity(tree, params)
+    chi2, p_val = validate_connectivity(cm_empirical, params.connectivity_matrix)
+    report.extra[:connectivity_chi2] = chi2
+    report.extra[:connectivity_pval] = p_val
+
     return report
 end
 
@@ -245,6 +348,35 @@ function print_report(io::IO, report::ValidationReport)
         println(io, "    N = $(length(report.branching_angles))")
         println(io, "    Mean = $(round(report.angle_mean, digits=4))")
         println(io, "    Std  = $(round(report.angle_std, digits=4))")
+        println(io, "")
+    end
+
+    if haskey(report.extra, :murray_max_deviation)
+        println(io, "  Murray's law deviation:")
+        println(io, "    Max  = $(report.extra[:murray_max_deviation])")
+        println(io, "    Mean = $(report.extra[:murray_mean_deviation])")
+        println(io, "")
+    end
+
+    if haskey(report.extra, :trifurcation_pct)
+        println(io, "  Trifurcation percentage: $(round(report.extra[:trifurcation_pct], digits=2))%")
+        println(io, "")
+    end
+
+    if haskey(report.extra, :lambda_values) && !isempty(report.extra[:lambda_values])
+        lambdas = report.extra[:lambda_values]
+        println(io, "  P(lambda) distribution:")
+        println(io, "    N = $(length(lambdas))")
+        mean_l = sum(lambdas) / length(lambdas)
+        println(io, "    Mean lambda = $(round(mean_l, digits=4))")
+        println(io, "    Min lambda  = $(round(minimum(lambdas), digits=4))")
+        println(io, "")
+    end
+
+    if haskey(report.extra, :connectivity_chi2)
+        println(io, "  Connectivity matrix:")
+        println(io, "    Chi-squared = $(round(report.extra[:connectivity_chi2], digits=2))")
+        println(io, "    p-value     = $(round(report.extra[:connectivity_pval], digits=4))")
     end
 end
 
