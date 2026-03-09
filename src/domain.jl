@@ -114,3 +114,138 @@ function sample_point(d::EllipsoidDomain, rng::AbstractRNG)
         in_domain(d, p) && return p
     end
 end
+
+# --- EllipsoidShellDomain ---
+
+"""
+    EllipsoidShellDomain
+
+Thin shell between two concentric ellipsoids. Models the myocardial wall
+where coronary arteries course. The outer boundary is the epicardial surface;
+the inner boundary is at `(1 - thickness)` fraction of the semi-axes.
+
+Coronary arteries grow within this shell, naturally wrapping around the
+heart-shaped surface rather than filling the interior volume.
+"""
+struct EllipsoidShellDomain <: AbstractDomain
+    center::NTuple{3, Float64}
+    semi_axes::NTuple{3, Float64}   # outer ellipsoid semi-axis lengths
+    thickness::Float64               # shell thickness as fraction (0, 1)
+end
+
+function in_domain(d::EllipsoidShellDomain, point)
+    nx = (point[1] - d.center[1]) / d.semi_axes[1]
+    ny = (point[2] - d.center[2]) / d.semi_axes[2]
+    nz = (point[3] - d.center[3]) / d.semi_axes[3]
+    r2 = nx * nx + ny * ny + nz * nz
+    inner = 1.0 - d.thickness
+    return r2 <= 1.0 && r2 >= inner * inner
+end
+
+function signed_distance(d::EllipsoidShellDomain, point)
+    nx = (point[1] - d.center[1]) / d.semi_axes[1]
+    ny = (point[2] - d.center[2]) / d.semi_axes[2]
+    nz = (point[3] - d.center[3]) / d.semi_axes[3]
+    r = sqrt(nx * nx + ny * ny + nz * nz)
+    inner = 1.0 - d.thickness
+    min_axis = min(d.semi_axes[1], d.semi_axes[2], d.semi_axes[3])
+
+    if r > 1.0
+        return (r - 1.0) * min_axis            # outside outer
+    elseif r < inner
+        return (inner - r) * min_axis           # inside inner hole
+    else
+        # Inside shell: negative distance to nearest boundary
+        d_to_outer = (1.0 - r) * min_axis
+        d_to_inner = (r - inner) * min_axis
+        return -min(d_to_outer, d_to_inner)
+    end
+end
+
+function sample_point(d::EllipsoidShellDomain, rng::AbstractRNG)
+    while true
+        x = d.center[1] + d.semi_axes[1] * (2.0 * rand(rng) - 1.0)
+        y = d.center[2] + d.semi_axes[2] * (2.0 * rand(rng) - 1.0)
+        z = d.center[3] + d.semi_axes[3] * (2.0 * rand(rng) - 1.0)
+        p = (x, y, z)
+        in_domain(d, p) && return p
+    end
+end
+
+# --- project_to_domain ---
+
+"""
+    project_to_domain(domain, point) -> NTuple{3, Float64}
+
+Project a point to the nearest location inside the domain.
+Returns the point unchanged if already inside.
+"""
+function project_to_domain(d::SphereDomain, point)
+    dx = point[1] - d.center[1]
+    dy = point[2] - d.center[2]
+    dz = point[3] - d.center[3]
+    r = sqrt(dx * dx + dy * dy + dz * dz)
+    r <= d.radius && return point
+    scale = d.radius / r
+    return (d.center[1] + dx * scale, d.center[2] + dy * scale, d.center[3] + dz * scale)
+end
+
+function project_to_domain(d::BoxDomain, point)
+    x = clamp(point[1], d.min_corner[1], d.max_corner[1])
+    y = clamp(point[2], d.min_corner[2], d.max_corner[2])
+    z = clamp(point[3], d.min_corner[3], d.max_corner[3])
+    return (x, y, z)
+end
+
+function project_to_domain(d::EllipsoidDomain, point)
+    nx = (point[1] - d.center[1]) / d.semi_axes[1]
+    ny = (point[2] - d.center[2]) / d.semi_axes[2]
+    nz = (point[3] - d.center[3]) / d.semi_axes[3]
+    r = sqrt(nx * nx + ny * ny + nz * nz)
+    r <= 1.0 && return point
+    scale = 1.0 / r
+    return (
+        d.center[1] + nx * scale * d.semi_axes[1],
+        d.center[2] + ny * scale * d.semi_axes[2],
+        d.center[3] + nz * scale * d.semi_axes[3],
+    )
+end
+
+function project_to_domain(d::EllipsoidShellDomain, point)
+    nx = (point[1] - d.center[1]) / d.semi_axes[1]
+    ny = (point[2] - d.center[2]) / d.semi_axes[2]
+    nz = (point[3] - d.center[3]) / d.semi_axes[3]
+    r = sqrt(nx * nx + ny * ny + nz * nz)
+    inner = 1.0 - d.thickness
+
+    if r < 1e-15
+        # At center — push to middle of shell along +x
+        mid = (inner + 1.0) / 2.0
+        return (d.center[1] + mid * d.semi_axes[1], d.center[2], d.center[3])
+    end
+
+    if r > 1.0
+        scale = 1.0 / r           # project to outer surface
+    elseif r < inner
+        scale = inner / r          # project to inner surface
+    else
+        return point               # already inside shell
+    end
+
+    return (
+        d.center[1] + nx * scale * d.semi_axes[1],
+        d.center[2] + ny * scale * d.semi_axes[2],
+        d.center[3] + nz * scale * d.semi_axes[3],
+    )
+end
+
+"""
+    default_coronary_domain() -> EllipsoidShellDomain
+
+Default heart-shaped shell domain for coronary tree generation.
+Semi-axes approximate a human heart (~100mm x 70mm x 90mm outer).
+Shell thickness 0.3 gives ~10-15mm myocardial wall.
+"""
+function default_coronary_domain()
+    return EllipsoidShellDomain((0.0, 0.0, 0.0), (50.0, 35.0, 45.0), 0.3)
+end

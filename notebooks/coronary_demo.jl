@@ -11,6 +11,7 @@ begin
 end
 
 # ╔═╡ f4c0b7fb-637d-4bd7-adff-4a06fe91c081
+# ╠═╡ show_logs = false
 using VesselTree
 
 # ╔═╡ 4378fe0a-1dd5-4b66-b6ae-b0668e12b944
@@ -140,22 +141,20 @@ end
 
 # ╔═╡ b3000001-c000-4d00-9e00-f00000000001
 md"""
-## 3D Coronary Forest
+## 3D Coronary Forest — Shell Domain
 
-Three arteries (LAD, LCX, RCA) with 500/300/400 CCO terminals, each subdivided to capillary scale. The plot filters to vessels > 30 um diameter for clarity -- capillaries exist in the data but are invisible at this zoom.
+Coronary arteries grow within an **ellipsoid shell** that models the myocardial wall. The shell domain constrains growth to wrap around the heart surface — exactly how real coronary arteries course along the epicardium.
+
+- CCO fills the shell with space-filling skeleton
+- Subdivision directions are projected to the surface tangent plane
+- All endpoints are constrained to stay within the shell
 """
 
 # ╔═╡ b3000002-c000-4d00-9e00-f00000000002
 begin
-	domain_3d = EllipsoidDomain((0.0, 0.0, 0.0), (50.0, 40.0, 35.0))
-	configs_3d = [
-		TreeConfig("LAD", (-5.0, 5.0, 30.0), 1.5, (1.0, -1.0, -1.0), 500, 0.40),
-		TreeConfig("LCX", (-5.0, -5.0, 30.0), 1.2, (1.0, 1.0, -1.0), 300, 0.25),
-		TreeConfig("RCA", (5.0, 0.0, 30.0), 1.3, (-1.0, 0.0, -1.0), 400, 0.35),
-	]
+	domain_3d = default_coronary_domain()  # EllipsoidShellDomain, 50x35x45mm, 30% thickness
 	t_3d = @elapsed forest_3d = generate_kassab_coronary(
 		domain_3d, params_rca;
-		tree_configs=configs_3d,
 		rng=MersenneTwister(42),
 		verbose=false,
 	)
@@ -163,14 +162,22 @@ begin
 
 	md"""
 	**3-artery forest:** $(total_3d) total segments in $(round(t_3d, digits=1))s
+
+	Domain: shell with outer semi-axes $(domain_3d.semi_axes), thickness $(domain_3d.thickness)
 	"""
 end
 
-# ╔═╡ b3000003-c000-4d00-9e00-f00000000003
+# ╔═╡ c1000001-d000-4e00-9f00-a00000000001
+md"""
+### Progressive CCO Growth in Shell Domain
+
+The LAD artery builds up progressively: 10 → 50 → 150 → 500 CCO terminals. Each new terminal is added via constrained optimization within the shell domain. The tree naturally wraps around the ellipsoid surface.
+"""
+
+# ╔═╡ c1000002-d000-4e00-9f00-a00000000002
 begin
-	# Helper: plot vessels in 3D, filtering by minimum diameter
-	function plot_vessels_3d!(ax, seg, n; color=:red, min_diam_um=30.0, nbins=15)
-		# Filter to visible vessels
+	# Helper: plot vessels in 3D (used by all 3D plots below)
+	function plot_vessels_3d!(ax, seg, n; color=:red, min_diam_um=0.0, nbins=15)
 		vis = [i for i in 1:n if seg.radius[i] * 2000 >= min_diam_um]
 		isempty(vis) && return
 
@@ -182,7 +189,6 @@ begin
 			lo = wmin + (b - 1) * (wmax - wmin) / nbins
 			hi = wmin + b * (wmax - wmin) / nbins
 			bw = (lo + hi) / 2
-
 			pts = Point3f[]
 			for k in eachindex(vis)
 				w = raw_w[k]
@@ -198,9 +204,118 @@ begin
 		end
 	end
 
+	# Helper: draw shell wireframe on an Axis3
+	function draw_shell_wireframe!(ax, dom; nθ=30, nφ=15)
+		θr = range(0, 2π, length=nθ)
+		φr = range(0, π, length=nφ)
+		a, b, c = dom.semi_axes
+		ell_x = [a * sin(p) * cos(t) for t in θr, p in φr]
+		ell_y = [b * sin(p) * sin(t) for t in θr, p in φr]
+		ell_z = [c * cos(p) for t in θr, p in φr]
+		wireframe!(ax, ell_x, ell_y, ell_z; color=(:white, 0.06), linewidth=0.2)
+	end
+
+	md"*Helper functions defined*"
+end
+
+# ╔═╡ c1000003-d000-4e00-9f00-a00000000003
+begin
+	# Grow LAD at progressive stages within the shell domain
+	cfg_lad = VesselTree.coronary_tree_configs(domain_3d)[1]
+	stages_n = [10, 50, 150, 500]
+	stage_trees = []
+
+	for nt in stages_n
+		tr = VascularTree("LAD", 5000)
+		dx, dy, dz = cfg_lad.root_direction
+		dlen = sqrt(dx^2 + dy^2 + dz^2)
+		dx /= dlen; dy /= dlen; dz /= dlen
+		root_len = cfg_lad.root_radius * 5.0
+		distal = (cfg_lad.root_position[1] + dx * root_len,
+		          cfg_lad.root_position[2] + dy * root_len,
+		          cfg_lad.root_position[3] + dz * root_len)
+		add_segment!(tr, cfg_lad.root_position, distal, cfg_lad.root_radius, Int32(-1))
+		grow_tree!(tr, domain_3d, nt, params_rca; rng=MersenneTwister(42), kassab=true)
+		push!(stage_trees, tr)
+	end
+
+	fig_prog = Figure(size=(1600, 420), backgroundcolor=:grey10)
+
+	for (col, tr, nt) in zip(1:4, stage_trees, stages_n)
+		ax = Axis3(fig_prog[1, col],
+			title="$nt terminals ($(tr.segments.n) seg)",
+			backgroundcolor=:grey10,
+			titlecolor=:white,
+			xlabelcolor=:white, ylabelcolor=:white, zlabelcolor=:white,
+			xticklabelcolor=:grey70, yticklabelcolor=:grey70, zticklabelcolor=:grey70,
+			azimuth=1.3, elevation=0.3)
+		draw_shell_wireframe!(ax, domain_3d)
+		plot_vessels_3d!(ax, tr.segments, tr.segments.n; color=:crimson)
+	end
+
+	fig_prog
+end
+
+# ╔═╡ c1000004-d000-4e00-9f00-a00000000004
+md"""
+### CCO Skeleton — All 3 Arteries (Before Subdivision)
+
+The full 3-artery CCO skeleton shows how LAD (red), LCX (blue), and RCA (green) each fill their territory on the shell. Thick segments are main arteries. This is the spatial framework that subdivision then fills in with microvasculature.
+"""
+
+# ╔═╡ c1000005-d000-4e00-9f00-a00000000005
+begin
+	# Build CCO-only trees (reuse forest_3d's CCO by growing fresh)
+	skel_trees = Dict{String, VascularTree}()
+	artery_colors_3d = Dict("LAD" => :crimson, "LCX" => :dodgerblue, "RCA" => :limegreen)
+
+	for cfg in VesselTree.coronary_tree_configs(domain_3d)
+		tr = VascularTree(cfg.name, 5000)
+		dx, dy, dz = cfg.root_direction
+		dlen = sqrt(dx^2 + dy^2 + dz^2)
+		dx /= dlen; dy /= dlen; dz /= dlen
+		root_len = cfg.root_radius * 5.0
+		distal = (cfg.root_position[1] + dx * root_len,
+		          cfg.root_position[2] + dy * root_len,
+		          cfg.root_position[3] + dz * root_len)
+		add_segment!(tr, cfg.root_position, distal, cfg.root_radius, Int32(-1))
+		grow_tree!(tr, domain_3d, cfg.target_terminals, params_rca;
+			rng=MersenneTwister(42), kassab=true)
+		skel_trees[cfg.name] = tr
+	end
+
+	fig_skel = Figure(size=(1400, 600), backgroundcolor=:grey10)
+
+	for (col, az, title) in [(1, 1.3, "Anterior"), (2, 4.5, "Posterior")]
+		ax = Axis3(fig_skel[1, col],
+			title="CCO Skeleton — $title",
+			xlabel="x (mm)", ylabel="y (mm)", zlabel="z (mm)",
+			backgroundcolor=:grey10,
+			titlecolor=:white,
+			xlabelcolor=:white, ylabelcolor=:white, zlabelcolor=:white,
+			xticklabelcolor=:grey70, yticklabelcolor=:grey70, zticklabelcolor=:grey70,
+			azimuth=az, elevation=0.3)
+		draw_shell_wireframe!(ax, domain_3d)
+
+		for name in ["RCA", "LCX", "LAD"]
+			tr = skel_trees[name]
+			plot_vessels_3d!(ax, tr.segments, tr.segments.n; color=artery_colors_3d[name])
+		end
+	end
+
+	total_skel = sum(t.segments.n for (_, t) in skel_trees)
+	Label(fig_skel[2, :],
+		"Total: $total_skel CCO segments — LAD $(skel_trees["LAD"].segments.n), LCX $(skel_trees["LCX"].segments.n), RCA $(skel_trees["RCA"].segments.n)",
+		color=:grey70, fontsize=12)
+
+	fig_skel
+end
+
+# ╔═╡ b3000003-c000-4d00-9e00-f00000000003
+begin
 	fig_3d = Figure(size=(1100, 850), backgroundcolor=:grey10)
 	ax3d = Axis3(fig_3d[1, 1],
-		title="Coronary Arterial Forest",
+		title="Coronary Arterial Forest — Shell Domain",
 		xlabel="x (mm)", ylabel="y (mm)", zlabel="z (mm)",
 		backgroundcolor=:grey10,
 		titlecolor=:white,
@@ -209,28 +324,29 @@ begin
 		azimuth=1.3, elevation=0.3,
 	)
 
-	# Draw semi-transparent wireframe ellipsoid ("heart" domain)
-	θ = range(0, 2π, length=40)
-	φ = range(0, π, length=20)
-	ex, ey, ez = 50.0, 40.0, 35.0  # ellipsoid semi-axes
-	ell_x = [ex * sin(p) * cos(t) for t in θ, p in φ]
-	ell_y = [ey * sin(p) * sin(t) for t in θ, p in φ]
-	ell_z = [ez * cos(p) for t in θ, p in φ]
-	wireframe!(ax3d, ell_x, ell_y, ell_z; color=(:white, 0.08), linewidth=0.3)
+	# Draw outer and inner wireframe ellipsoids (shell boundaries)
+	θ_3d = range(0, 2π, length=40)
+	φ_3d = range(0, π, length=20)
+	ex, ey, ez = domain_3d.semi_axes
+	inner_frac = 1.0 - domain_3d.thickness
 
-	artery_colors_3d = Dict("LAD" => :crimson, "LCX" => :dodgerblue, "RCA" => :limegreen)
+	# Outer ellipsoid
+	ell_x = [ex * sin(p) * cos(t) for t in θ_3d, p in φ_3d]
+	ell_y = [ey * sin(p) * sin(t) for t in θ_3d, p in φ_3d]
+	ell_z = [ez * cos(p) for t in θ_3d, p in φ_3d]
+	wireframe!(ax3d, ell_x, ell_y, ell_z; color=(:white, 0.06), linewidth=0.3)
+
+	# Inner ellipsoid
+	ell_xi = [ex * inner_frac * sin(p) * cos(t) for t in θ_3d, p in φ_3d]
+	ell_yi = [ey * inner_frac * sin(p) * sin(t) for t in θ_3d, p in φ_3d]
+	ell_zi = [ez * inner_frac * cos(p) for t in θ_3d, p in φ_3d]
+	wireframe!(ax3d, ell_xi, ell_yi, ell_zi; color=(:cyan, 0.04), linewidth=0.2)
+
 	for name in ["RCA", "LCX", "LAD"]
 		tree = forest_3d.trees[name]
 		plot_vessels_3d!(ax3d, tree.segments, tree.segments.n;
 			color=artery_colors_3d[name], min_diam_um=30.0)
 	end
-
-	Legend(fig_3d[1, 2],
-		[LineElement(color=c, linewidth=3) for c in [:crimson, :dodgerblue, :limegreen]],
-		["LAD", "LCX", "RCA"],
-		labelcolor=:white, framecolor=:grey40, backgroundcolor=:grey20,
-		tellheight=false, tellwidth=false, halign=:right, valign=:top,
-		margin=(10, 10, 10, 10))
 
 	fig_3d
 end
@@ -530,7 +646,12 @@ end
 # ╟─a2000002-b000-4c00-8d00-e00000000004
 # ╟─b3000001-c000-4d00-9e00-f00000000001
 # ╠═b3000002-c000-4d00-9e00-f00000000002
-# ╟─b3000003-c000-4d00-9e00-f00000000003
+# ╟─c1000001-d000-4e00-9f00-a00000000001
+# ╠═c1000002-d000-4e00-9f00-a00000000002
+# ╟─c1000003-d000-4e00-9f00-a00000000003
+# ╟─c1000004-d000-4e00-9f00-a00000000004
+# ╟─c1000005-d000-4e00-9f00-a00000000005
+# ╠═b3000003-c000-4d00-9e00-f00000000003
 # ╟─b3000004-c000-4d00-9e00-f00000000004
 # ╟─b3000005-c000-4d00-9e00-f00000000005
 # ╟─cbca48e2-3fbb-4b6e-9f87-2998578795f1

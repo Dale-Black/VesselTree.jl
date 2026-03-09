@@ -40,8 +40,8 @@ include("export.jl")
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
 export MorphometricParams, kassab_coronary_params, kassab_rca_params, kassab_lad_params, kassab_lcx_params, classify_order
-export AbstractDomain, SphereDomain, BoxDomain, EllipsoidDomain
-export in_domain, sample_point, signed_distance
+export AbstractDomain, SphereDomain, BoxDomain, EllipsoidDomain, EllipsoidShellDomain
+export in_domain, sample_point, signed_distance, project_to_domain, default_coronary_domain
 export point_segment_distance, point_segment_distance_sq
 export compute_all_distances!, find_nearest_segments
 export segments_intersect, segments_min_distance_sq

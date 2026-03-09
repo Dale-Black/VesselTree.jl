@@ -139,6 +139,8 @@ function _domain_size(domain::AbstractDomain)
         )
     elseif domain isa EllipsoidDomain
         return max(domain.semi_axes[1], domain.semi_axes[2], domain.semi_axes[3])
+    elseif domain isa EllipsoidShellDomain
+        return max(domain.semi_axes[1], domain.semi_axes[2], domain.semi_axes[3])
     end
     return 1.0
 end

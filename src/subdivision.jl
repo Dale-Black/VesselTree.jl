@@ -7,6 +7,34 @@
 # the S/E ratio (segments per element) observed in Kassab 1993.
 
 """
+    _shell_tangent_project(domain::EllipsoidShellDomain, point, dir) -> NTuple{3,Float64}
+
+Project a direction vector onto the tangent plane of the ellipsoid shell at the
+given point. Removes the radial (surface-normal) component so that segments
+follow the shell surface rather than escaping through it.
+"""
+function _shell_tangent_project(domain::EllipsoidShellDomain, point, dir)
+    a, b, c = domain.semi_axes
+    cx, cy, cz = domain.center
+    # Outward normal (gradient of x²/a² + y²/b² + z²/c²)
+    nx = (point[1] - cx) / (a * a)
+    ny = (point[2] - cy) / (b * b)
+    nz = (point[3] - cz) / (c * c)
+    nlen = sqrt(nx^2 + ny^2 + nz^2)
+    nlen < 1e-15 && return dir
+    nx /= nlen; ny /= nlen; nz /= nlen
+
+    # Remove radial component: d_tangent = d - (d·n)n
+    dot = dir[1] * nx + dir[2] * ny + dir[3] * nz
+    tx = dir[1] - dot * nx
+    ty = dir[2] - dot * ny
+    tz = dir[3] - dot * nz
+    tlen = sqrt(tx^2 + ty^2 + tz^2)
+    tlen < 1e-15 && return dir  # pure radial — keep original
+    return (tx / tlen, ty / tlen, tz / tlen)
+end
+
+"""
     estimate_total_segments(parent_order, params) -> Int
 
 Estimate total segments produced by recursively subdividing a parent of given
@@ -215,6 +243,7 @@ function subdivide_terminals!(
     params::MorphometricParams;
     rng::AbstractRNG=Random.default_rng(),
     max_order::Int=params.n_orders - 1,
+    domain::Union{AbstractDomain, Nothing}=nothing,
 )
     assign_strahler_orders!(tree, params)
 
@@ -233,7 +262,7 @@ function subdivide_terminals!(
     end
 
     for k in 1:length(term_indices)
-        _subdivide_recursive!(tree, term_indices[k], term_orders[k], params, rng)
+        _subdivide_recursive!(tree, term_indices[k], term_orders[k], params, rng, domain)
     end
 
     return tree
@@ -256,6 +285,7 @@ function _subdivide_recursive!(
     parent_order::Int,
     params::MorphometricParams,
     rng::AbstractRNG,
+    domain::Union{AbstractDomain, Nothing}=nothing,
 )
     parent_order <= 0 && return
 
@@ -319,20 +349,53 @@ function _subdivide_recursive!(
         # Create daughter segment (branch)
         d_length = _sample_segment_length(d_order, params, rng)
         d_dir = _random_daughter_direction(current_dir, false, d_order, parent_order, rng)
+
+        # Shell domain: project direction to surface tangent so segments follow the shell
+        if domain isa EllipsoidShellDomain
+            d_dir = _shell_tangent_project(domain, bp, d_dir)
+        end
+
         d_distal = (bp_x + d_dir[1] * d_length, bp_y + d_dir[2] * d_length, bp_z + d_dir[3] * d_length)
+
+        # Domain constraint: project distal point back into domain if outside
+        if domain !== nothing && !in_domain(domain, d_distal)
+            d_distal = project_to_domain(domain, d_distal)
+        end
+
         d_id = add_segment!(tree, bp, d_distal, d_radius, Int32(current_parent))
         tree.topology.strahler_order[d_id] = Int32(d_order)
 
         # Create continuation segment (same order as parent element)
         c_length = _sample_segment_length(parent_order, params, rng)
         c_dir = _random_daughter_direction(current_dir, true, parent_order, parent_order, rng)
+
+        # Shell domain: project continuation direction to surface tangent
+        if domain isa EllipsoidShellDomain
+            c_dir = _shell_tangent_project(domain, bp, c_dir)
+        end
+
         c_distal = (bp_x + c_dir[1] * c_length, bp_y + c_dir[2] * c_length, bp_z + c_dir[3] * c_length)
+
+        # Domain constraint: project continuation distal point too
+        if domain !== nothing && !in_domain(domain, c_distal)
+            c_distal = project_to_domain(domain, c_distal)
+        end
+
         c_id = add_segment!(tree, bp, c_distal, c_radius, Int32(current_parent))
         tree.topology.strahler_order[c_id] = Int32(parent_order)
 
+        # Update direction from actual (possibly projected) continuation segment
+        actual_cx = c_distal[1] - bp_x
+        actual_cy = c_distal[2] - bp_y
+        actual_cz = c_distal[3] - bp_z
+        actual_len = sqrt(actual_cx^2 + actual_cy^2 + actual_cz^2)
+        if actual_len > 1e-15
+            c_dir = (actual_cx / actual_len, actual_cy / actual_len, actual_cz / actual_len)
+        end
+
         # Recursively subdivide the daughter
         if d_order > 0
-            _subdivide_recursive!(tree, Int(d_id), d_order, params, rng)
+            _subdivide_recursive!(tree, Int(d_id), d_order, params, rng, domain)
         end
 
         # Move to continuation for next bifurcation in the chain

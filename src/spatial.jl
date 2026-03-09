@@ -41,6 +41,9 @@ function build_grid(segments::SegmentData, n::Int, domain::AbstractDomain, cell_
     elseif domain isa EllipsoidDomain
         lo = (domain.center[1] - domain.semi_axes[1], domain.center[2] - domain.semi_axes[2], domain.center[3] - domain.semi_axes[3])
         hi = (domain.center[1] + domain.semi_axes[1], domain.center[2] + domain.semi_axes[2], domain.center[3] + domain.semi_axes[3])
+    elseif domain isa EllipsoidShellDomain
+        lo = (domain.center[1] - domain.semi_axes[1], domain.center[2] - domain.semi_axes[2], domain.center[3] - domain.semi_axes[3])
+        hi = (domain.center[1] + domain.semi_axes[1], domain.center[2] + domain.semi_axes[2], domain.center[3] + domain.semi_axes[3])
     else
         error("Unsupported domain type for spatial grid")
     end

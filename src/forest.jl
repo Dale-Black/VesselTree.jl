@@ -43,6 +43,9 @@ function initialize_territories(domain::AbstractDomain, configs::Vector{TreeConf
     elseif domain isa EllipsoidDomain
         lo = (domain.center[1] - domain.semi_axes[1], domain.center[2] - domain.semi_axes[2], domain.center[3] - domain.semi_axes[3])
         hi = (domain.center[1] + domain.semi_axes[1], domain.center[2] + domain.semi_axes[2], domain.center[3] + domain.semi_axes[3])
+    elseif domain isa EllipsoidShellDomain
+        lo = (domain.center[1] - domain.semi_axes[1], domain.center[2] - domain.semi_axes[2], domain.center[3] - domain.semi_axes[3])
+        hi = (domain.center[1] + domain.semi_axes[1], domain.center[2] + domain.semi_axes[2], domain.center[3] + domain.semi_axes[3])
     else
         error("Unsupported domain type")
     end
@@ -155,6 +158,80 @@ function coronary_tree_configs()
         TreeConfig("LAD", (-2.0, 1.0, 0.0), 1.5, (0.0, -1.0, -0.5), 1000, 0.40),
         TreeConfig("LCX", (-2.0, -1.0, 0.0), 1.2, (0.0, -1.0, 0.5), 600, 0.25),
         TreeConfig("RCA", (2.0, 0.0, 0.0), 1.3, (0.0, -1.0, 0.0), 800, 0.35),
+    ]
+end
+
+"""
+    _surface_tangent_down(domain::EllipsoidShellDomain, pos) -> NTuple{3, Float64}
+
+Compute a surface-tangent direction that points roughly "downward" (toward the
+apex, -z direction) from a point on the ellipsoid surface. Used to set initial
+growth directions for coronary arteries.
+"""
+function _surface_tangent_down(domain::EllipsoidShellDomain, pos)
+    a, b, c = domain.semi_axes
+    cx, cy, cz = domain.center
+    # Surface normal (gradient of x²/a² + y²/b² + z²/c²)
+    nx = (pos[1] - cx) / (a * a)
+    ny = (pos[2] - cy) / (b * b)
+    nz = (pos[3] - cz) / (c * c)
+    nlen = sqrt(nx^2 + ny^2 + nz^2)
+    nlen < 1e-15 && return (0.0, 0.0, -1.0)
+    nx /= nlen; ny /= nlen; nz /= nlen
+
+    # Project "downward" (0,0,-1) onto tangent plane: d - (d·n)n
+    dot_dn = -nz  # (0,0,-1) · n
+    dx = -dot_dn * nx
+    dy = -dot_dn * ny
+    dz = -1.0 - dot_dn * nz
+    dlen = sqrt(dx^2 + dy^2 + dz^2)
+    dlen > 1e-10 && return (dx / dlen, dy / dlen, dz / dlen)
+    return (0.0, 0.0, -1.0)
+end
+
+"""
+    coronary_tree_configs(domain::EllipsoidShellDomain) -> Vector{TreeConfig}
+
+Shell-aware coronary tree configuration. Places root positions ON the shell
+surface at anatomically-motivated locations, with growth directions tangent
+to the surface and pointing toward the apex.
+"""
+function coronary_tree_configs(domain::EllipsoidShellDomain)
+    a, b, c = domain.semi_axes
+    cx, cy, cz = domain.center
+
+    # Place roots on the upper portion of the outer ellipsoid surface
+    # using spherical parameterization: (a sinθ cosφ, b sinθ sinφ, c cosθ)
+    # θ=0 is north pole (z=+c, superior), θ=π is south pole (z=-c, apex)
+
+    # LAD: anterior, slightly left — courses down the anterior surface
+    # θ≈0.5 (near base), φ≈π/6 (anterior-left)
+    θ_lad, φ_lad = 0.5, π / 6
+    pos_lad = (cx + a * sin(θ_lad) * cos(φ_lad),
+               cy + b * sin(θ_lad) * sin(φ_lad),
+               cz + c * cos(θ_lad))
+    dir_lad = _surface_tangent_down(domain, pos_lad)
+
+    # LCX: left-posterior — courses around the left/back
+    # θ≈0.4 (near base), φ≈2π/3 (left-posterior)
+    θ_lcx, φ_lcx = 0.4, 2π / 3
+    pos_lcx = (cx + a * sin(θ_lcx) * cos(φ_lcx),
+               cy + b * sin(θ_lcx) * sin(φ_lcx),
+               cz + c * cos(θ_lcx))
+    dir_lcx = _surface_tangent_down(domain, pos_lcx)
+
+    # RCA: right-anterior — courses down the right side
+    # θ≈0.5 (near base), φ≈-π/4 (right-anterior)
+    θ_rca, φ_rca = 0.5, -π / 4
+    pos_rca = (cx + a * sin(θ_rca) * cos(φ_rca),
+               cy + b * sin(θ_rca) * sin(φ_rca),
+               cz + c * cos(θ_rca))
+    dir_rca = _surface_tangent_down(domain, pos_rca)
+
+    return [
+        TreeConfig("LAD", pos_lad, 1.5, dir_lad, 500, 0.40),
+        TreeConfig("LCX", pos_lcx, 1.2, dir_lcx, 300, 0.25),
+        TreeConfig("RCA", pos_rca, 1.3, dir_rca, 400, 0.35),
     ]
 end
 
@@ -377,6 +454,83 @@ function generate_coronary_forest(
 end
 
 """
+    _project_tree_to_domain!(tree, domain)
+
+Project all segment endpoints back into the domain. Applied after Barabasi
+geometry to ensure no segments escape the domain boundary.
+Processes in topological order (parent before child) so that proximal
+adjustments propagate correctly.
+"""
+function _project_tree_to_domain!(tree::VascularTree, domain::EllipsoidShellDomain)
+    seg = tree.segments
+    topo = tree.topology
+
+    # Multiple passes in topological order. For out-of-domain distals, redirect the
+    # segment to be surface-tangent (preserving length) rather than just projecting
+    # the endpoint. This keeps branches following the shell surface.
+    for _pass in 1:5
+        n_fixed = 0
+        for i in 1:seg.n
+            # Project proximal if outside (root segments, etc.)
+            pp = (seg.proximal_x[i], seg.proximal_y[i], seg.proximal_z[i])
+            if !in_domain(domain, pp)
+                proj = project_to_domain(domain, pp)
+                seg.proximal_x[i] = proj[1]
+                seg.proximal_y[i] = proj[2]
+                seg.proximal_z[i] = proj[3]
+                pp = proj
+                n_fixed += 1
+            end
+
+            dp = (seg.distal_x[i], seg.distal_y[i], seg.distal_z[i])
+            if !in_domain(domain, dp)
+                # Redirect: project direction to surface tangent, re-extend
+                dx = dp[1] - pp[1]
+                dy = dp[2] - pp[2]
+                dz = dp[3] - pp[3]
+                seg_len = sqrt(dx^2 + dy^2 + dz^2)
+
+                if seg_len > 1e-15
+                    dir = (dx / seg_len, dy / seg_len, dz / seg_len)
+                    tdir = _shell_tangent_project(domain, pp, dir)
+                    new_dp = (pp[1] + tdir[1] * seg_len,
+                              pp[2] + tdir[2] * seg_len,
+                              pp[3] + tdir[3] * seg_len)
+
+                    # If still outside after tangent redirect, project endpoint
+                    if !in_domain(domain, new_dp)
+                        new_dp = project_to_domain(domain, new_dp)
+                    end
+                else
+                    new_dp = project_to_domain(domain, dp)
+                end
+
+                seg.distal_x[i] = new_dp[1]
+                seg.distal_y[i] = new_dp[2]
+                seg.distal_z[i] = new_dp[3]
+                n_fixed += 1
+
+                # Sync children's proximal points
+                for cid in (topo.child1_id[i], topo.child2_id[i], topo.child3_id[i])
+                    if cid > 0
+                        seg.proximal_x[cid] = new_dp[1]
+                        seg.proximal_y[cid] = new_dp[2]
+                        seg.proximal_z[cid] = new_dp[3]
+                    end
+                end
+            end
+
+            # Update segment length
+            ex = seg.distal_x[i] - seg.proximal_x[i]
+            ey = seg.distal_y[i] - seg.proximal_y[i]
+            ez = seg.distal_z[i] - seg.proximal_z[i]
+            seg.seg_length[i] = sqrt(ex * ex + ey * ey + ez * ez)
+        end
+        n_fixed == 0 && break  # converged
+    end
+end
+
+"""
     _params_for_tree(name, default_params) -> MorphometricParams
 
 Auto-select per-artery Kassab params based on tree name.
@@ -412,7 +566,7 @@ function generate_kassab_coronary(
     rng::AbstractRNG=Random.default_rng(),
     verbose::Bool=false,
     handoff_order::Int=5,
-    tree_configs::Vector{TreeConfig}=coronary_tree_configs(),
+    tree_configs::Vector{TreeConfig}=(domain isa EllipsoidShellDomain ? coronary_tree_configs(domain) : coronary_tree_configs()),
 )
     t_start = time()
 
@@ -623,7 +777,7 @@ function generate_kassab_coronary(
     for (name, tree) in trees
         tp = per_artery[name]
         ho = min(handoff_order, tp.n_orders - 1)
-        subdivide_terminals!(tree, tp; rng=rng, max_order=ho)
+        subdivide_terminals!(tree, tp; rng=rng, max_order=ho, domain=domain)
         if verbose
             println("  $(name): $(tree.segments.n) segments after subdivision")
         end
@@ -682,6 +836,17 @@ function generate_kassab_coronary(
     t_phase3_end = time()
     if verbose
         println("  Phase 3 time: $(round(t_phase3_end - t_phase3, digits=1))s")
+    end
+
+    # Phase 3b: Domain projection — project any out-of-domain endpoints back
+    # Barabasi geometry may have rotated segments outside the domain
+    if domain isa EllipsoidShellDomain
+        for (name, tree) in trees
+            _project_tree_to_domain!(tree, domain)
+        end
+        if verbose
+            println("  Domain projection applied")
+        end
     end
 
     # Phase 4: Summary
