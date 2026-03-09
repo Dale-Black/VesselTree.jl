@@ -149,7 +149,55 @@ Let's watch the LAD grow progressively to verify it wraps around the shell corre
 
 # ╔═╡ 7fcc9a94-7cf4-4fdb-9e22-6e3bacd643a2
 begin
-	# Helper: plot vessels in 3D with linewidth ∝ radius
+	# Color palette for Strahler orders (high order = warm/thick, low order = cool/thin)
+	const ORDER_CMAP = [
+		RGBf(0.7, 0.7, 0.85),   # 0 — capillaries (faint)
+		RGBf(0.55, 0.55, 0.8),  # 1
+		RGBf(0.3, 0.5, 0.9),    # 2
+		RGBf(0.2, 0.7, 0.8),    # 3
+		RGBf(0.1, 0.75, 0.5),   # 4
+		RGBf(0.4, 0.8, 0.2),    # 5
+		RGBf(0.85, 0.75, 0.1),  # 6
+		RGBf(0.95, 0.55, 0.1),  # 7
+		RGBf(0.9, 0.3, 0.1),    # 8
+		RGBf(0.8, 0.1, 0.2),    # 9
+		RGBf(0.6, 0.05, 0.4),   # 10
+		RGBf(0.4, 0.0, 0.5),    # 11
+	]
+
+	"""Plot vessels colored by Strahler order, linewidth ∝ order."""
+	function plot_tree_by_order!(ax, tree; max_order=12, min_order=0, alpha_base=0.6)
+		seg = tree.segments
+		topo = tree.topology
+		n = seg.n
+		n == 0 && return
+
+		# Group segments by Strahler order
+		max_ord = min(max_order, maximum(topo.strahler_order[i] for i in 1:n))
+
+		for ord in max_ord:-1:min_order
+			ord < 0 && continue
+			pts = Point3f[]
+			for i in 1:n
+				Int(topo.strahler_order[i]) != ord && continue
+				push!(pts, Point3f(seg.proximal_x[i], seg.proximal_y[i], seg.proximal_z[i]))
+				push!(pts, Point3f(seg.distal_x[i], seg.distal_y[i], seg.distal_z[i]))
+			end
+			isempty(pts) && continue
+
+			# Linewidth: 0.3 for order 0, up to 6 for highest orders
+			lw = clamp(0.3 + ord * 0.6, 0.3, 6.0)
+			# Color from palette
+			cidx = clamp(ord + 1, 1, length(ORDER_CMAP))
+			c = ORDER_CMAP[cidx]
+			# Alpha: faint for low orders, solid for high
+			a = clamp(alpha_base + (1.0 - alpha_base) * ord / max(max_ord, 1), 0.15, 1.0)
+
+			linesegments!(ax, pts; linewidth=lw, color=(c, a))
+		end
+	end
+
+	"""Plot vessels with single color, linewidth ∝ radius (for per-artery views)."""
 	function plot_vessels_3d!(ax, seg, n; color=:red, min_diam_um=0.0, nbins=15)
 		vis = [i for i in 1:n if seg.radius[i] * 2000 >= min_diam_um]
 		isempty(vis) && return
@@ -178,15 +226,17 @@ begin
 	end
 
 	# Helper: draw shell wireframe
-	function draw_shell_wireframe!(ax, dom; nθ=30, nφ=15)
+	function draw_shell_wireframe!(ax, dom; nθ=30, nφ=15, color=(:grey70, 0.15))
 		θr = range(0, 2π, length=nθ)
 		φr = range(0, π, length=nφ)
 		a, b, c = dom.semi_axes
 		ell_x = [a * sin(p) * cos(t) for t in θr, p in φr]
 		ell_y = [b * sin(p) * sin(t) for t in θr, p in φr]
 		ell_z = [c * cos(p) for t in θr, p in φr]
-		wireframe!(ax, ell_x, ell_y, ell_z; color=(:white, 0.06), linewidth=0.2)
+		wireframe!(ax, ell_x, ell_y, ell_z; color=color, linewidth=0.3)
 	end
+
+	md"*Plotting helpers defined (order-colored + single-color)*"
 end
 
 # ╔═╡ ccce5307-01aa-4f91-a343-1c4d6eaaedf9
@@ -315,48 +365,65 @@ md"""
 
 # ╔═╡ 45b8cbfe-26c8-42cc-b58d-5c3461924146
 md"""
-### 3D Visualization — Anterior and Posterior Views
+### 3D Visualization — Color by Strahler Order
+
+Segments are colored by **Strahler order**: warm/thick = large arteries (high order), cool/thin = small branches (low order). Only orders above a threshold are drawn to keep the plot readable.
+
+**Per-artery views** show each tree individually; **combined view** shows all 3 together.
 """
 
 # ╔═╡ 941e4826-8025-450b-bd3c-ea7367f423fe
 begin
 	artery_colors = Dict("LAD" => :crimson, "LCX" => :dodgerblue, "RCA" => :limegreen)
 
-	# Tiered views: top = main branches only, bottom = more detail
-	fig_3d = Figure(size=(1400, 1100), backgroundcolor=:grey10)
+	# --- Per-artery views (order-colored) ---
+	draw_min_order = 3  # only draw orders >= 3 (skip capillaries)
 
-	n_vis = Dict{Float64,Int}()
-	for (row, min_d, label) in [
-		(1, 200.0, "Main Arteries (D > 200 um)"),
-		(2, 50.0,  "+ Microvasculature (D > 50 um)"),
-	]
-		row_n = 0
-		for (col, az, vtitle) in [(1, 1.3, "Anterior"), (2, 4.5, "Posterior")]
-			ax = Axis3(fig_3d[row, col],
-				title="$vtitle — $label",
-				xlabel="x", ylabel="y", zlabel="z",
-				backgroundcolor=:grey10,
-				titlecolor=:white, titlesize=11,
-				xlabelcolor=:white, ylabelcolor=:white, zlabelcolor=:white,
-				xticklabelcolor=:grey70, yticklabelcolor=:grey70, zticklabelcolor=:grey70,
-				azimuth=az, elevation=0.3)
-			draw_shell_wireframe!(ax, domain)
+	fig_per = Figure(size=(1500, 500))
 
-			for name in ["RCA", "LCX", "LAD"]
-				tree = forest.trees[name]
-				plot_vessels_3d!(ax, tree.segments, tree.segments.n;
-					color=artery_colors[name], min_diam_um=min_d)
-				if col == 1
-					row_n += count(i -> tree.segments.radius[i] * 2000 >= min_d, 1:tree.segments.n)
-				end
-			end
-		end
-		n_vis[min_d] = row_n
+	for (col, name) in enumerate(["LAD", "LCX", "RCA"])
+		tree = forest.trees[name]
+		n = tree.segments.n
+		max_ord = maximum(tree.topology.strahler_order[i] for i in 1:n)
+		n_drawn = count(i -> tree.topology.strahler_order[i] >= draw_min_order, 1:n)
+
+		ax = Axis3(fig_per[1, col],
+			title="$name (orders $draw_min_order–$max_ord, $n_drawn seg)",
+			xlabel="x", ylabel="y", zlabel="z",
+			titlesize=12,
+			azimuth=1.3, elevation=0.3)
+		draw_shell_wireframe!(ax, domain)
+		plot_tree_by_order!(ax, tree; max_order=Int(max_ord), min_order=draw_min_order)
 	end
 
-	Label(fig_3d[3, :],
-		"Top: $(get(n_vis, 200.0, 0)) seg (D>200um)  |  Bottom: $(get(n_vis, 50.0, 0)) seg (D>50um)  |  Full tree: $total_segs",
-		color=:grey70, fontsize=11)
+	fig_per
+end
+
+# ╔═╡ d2000001-0000-0000-0000-000000000001
+begin
+	# --- Combined 3-artery view (order-colored, anterior + posterior) ---
+	fig_3d = Figure(size=(1400, 600))
+
+	for (col, az, vtitle) in [(1, 1.3, "Anterior"), (2, 4.5, "Posterior")]
+		all_n = 0
+		ax = Axis3(fig_3d[1, col],
+			title="$vtitle — All Arteries (order >= $draw_min_order)",
+			xlabel="x (mm)", ylabel="y (mm)", zlabel="z (mm)",
+			titlesize=12,
+			azimuth=az, elevation=0.3)
+		draw_shell_wireframe!(ax, domain)
+
+		for name in ["RCA", "LCX", "LAD"]
+			tree = forest.trees[name]
+			max_ord = Int(maximum(tree.topology.strahler_order[i] for i in 1:tree.segments.n))
+			plot_tree_by_order!(ax, tree; max_order=max_ord, min_order=draw_min_order)
+			all_n += count(i -> tree.topology.strahler_order[i] >= draw_min_order, 1:tree.segments.n)
+		end
+	end
+
+	Label(fig_3d[2, :],
+		"Showing orders >= $draw_min_order  |  Full tree: $total_segs segments",
+		fontsize=11, color=:grey40)
 
 	fig_3d
 end
@@ -533,6 +600,7 @@ The stopping criterion *"90% of terminals < x"* is automatically satisfied by th
 # ╟─28f107f7-1f6f-4329-9f5b-a125f19675f3
 # ╟─45b8cbfe-26c8-42cc-b58d-5c3461924146
 # ╠═941e4826-8025-450b-bd3c-ea7367f423fe
+# ╠═d2000001-0000-0000-0000-000000000001
 # ╟─69e142f1-228e-409d-a096-09b391d3a026
 # ╠═091f9ae7-29f9-4514-b449-91fdc8c31e7e
 # ╟─4630961f-8aed-4dbb-b3bc-0c97984d56b1
