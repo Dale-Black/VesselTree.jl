@@ -209,6 +209,15 @@ begin
 		azimuth=1.3, elevation=0.3,
 	)
 
+	# Draw semi-transparent wireframe ellipsoid ("heart" domain)
+	θ = range(0, 2π, length=40)
+	φ = range(0, π, length=20)
+	ex, ey, ez = 50.0, 40.0, 35.0  # ellipsoid semi-axes
+	ell_x = [ex * sin(p) * cos(t) for t in θ, p in φ]
+	ell_y = [ey * sin(p) * sin(t) for t in θ, p in φ]
+	ell_z = [ez * cos(p) for t in θ, p in φ]
+	wireframe!(ax3d, ell_x, ell_y, ell_z; color=(:white, 0.08), linewidth=0.3)
+
 	artery_colors_3d = Dict("LAD" => :crimson, "LCX" => :dodgerblue, "RCA" => :limegreen)
 	for name in ["RCA", "LCX", "LAD"]
 		tree = forest_3d.trees[name]
@@ -216,21 +225,12 @@ begin
 			color=artery_colors_3d[name], min_diam_um=30.0)
 	end
 
-	n_vis = sum(
-		count(i -> forest_3d.trees[nm].segments.radius[i] * 2000 >= 30, 1:forest_3d.trees[nm].segments.n)
-		for nm in ["LAD", "LCX", "RCA"]
-	)
-
 	Legend(fig_3d[1, 2],
 		[LineElement(color=c, linewidth=3) for c in [:crimson, :dodgerblue, :limegreen]],
 		["LAD", "LCX", "RCA"],
 		labelcolor=:white, framecolor=:grey40, backgroundcolor=:grey20,
 		tellheight=false, tellwidth=false, halign=:right, valign=:top,
 		margin=(10, 10, 10, 10))
-
-	# Label(fig_3d[2, 1],
-	# 	"$(total_3d) total segments | $(n_vis) shown (> 30 um) | capillaries to 8 um in data",
-	# 	color=:grey60, fontsize=12)
 
 	fig_3d
 end
