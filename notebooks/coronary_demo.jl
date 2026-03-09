@@ -345,7 +345,7 @@ begin
 	for name in ["RCA", "LCX", "LAD"]
 		tree = forest_3d.trees[name]
 		plot_vessels_3d!(ax3d, tree.segments, tree.segments.n;
-			color=artery_colors_3d[name], min_diam_um=30.0)
+			color=artery_colors_3d[name], min_diam_um=200.0)
 	end
 
 	fig_3d
