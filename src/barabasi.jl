@@ -33,11 +33,48 @@ function classify_junction(rho::Float64, params::MorphometricParams)
 end
 
 """
+    _murray_junction_angles(r_parent, r_large, r_small) -> (angle_large, angle_small)
+
+Compute optimal bifurcation angles from Poiseuille flow minimization.
+Independent of Murray exponent γ — angles depend on r⁴ (Poiseuille's law):
+
+    cos(α₁) = (r_p⁴ + r₁⁴ - r₂⁴) / (2 · r_p² · r₁²)
+    cos(α₂) = (r_p⁴ + r₂⁴ - r₁⁴) / (2 · r_p² · r₂²)
+
+Returns (angle_large, angle_small) in radians, clamped to [0, 75°].
+"""
+function _murray_junction_angles(r_parent::Float64, r_large::Float64, r_small::Float64)
+    rp4 = r_parent^4
+    rl4 = r_large^4
+    rs4 = r_small^4
+    rp2 = r_parent^2
+    rl2 = r_large^2
+    rs2 = r_small^2
+
+    # cos(α_large) = (rp⁴ + rl⁴ - rs⁴) / (2·rp²·rl²)
+    denom_l = 2.0 * rp2 * rl2
+    cos_l = denom_l > 1e-30 ? clamp((rp4 + rl4 - rs4) / denom_l, -1.0, 1.0) : 1.0
+    angle_large = acos(cos_l)
+
+    # cos(α_small) = (rp⁴ + rs⁴ - rl⁴) / (2·rp²·rs²)
+    denom_s = 2.0 * rp2 * rs2
+    cos_s = denom_s > 1e-30 ? clamp((rp4 + rs4 - rl4) / denom_s, -1.0, 1.0) : 0.0
+    angle_small = acos(cos_s)
+
+    # Physiological cap: no branch should exceed ~75° (1.31 rad)
+    max_angle = 1.31  # ~75 degrees
+    angle_large = min(angle_large, max_angle)
+    angle_small = min(angle_small, max_angle)
+
+    return (angle_large, angle_small)
+end
+
+"""
     compute_junction_angles(rho, params) -> (angle_large, angle_small)
 
 Compute daughter branch angles based on rho parameter.
-- Sprouting (rho < rho_th): large continues straight (0), small at ~90 deg
-- Branching (rho >= rho_th): both deflect, angles depend on rho
+- Sprouting (rho < rho_th): large continues nearly straight, small deflects moderately
+- Branching (rho >= rho_th): both deflect per Poiseuille-optimal formula
 
 Returns (angle_large, angle_small) in radians.
 """
@@ -45,45 +82,28 @@ function compute_junction_angles(rho::Float64, params::MorphometricParams)
     rho_th = params.sprouting_rho_th
 
     if rho < rho_th
-        # Sprouting regime: large daughter continues straight, small branches perpendicular
-        angle_large = 0.0
-        angle_small = π / 2.0
+        # Sprouting regime: large daughter nearly straight, small branches off
+        # Angle increases with rho: at rho≈0 the side branch is tiny (large angle),
+        # at rho→rho_th it transitions toward branching angles
+        # Use Poiseuille formula with estimated radii:
+        # Assume r_parent=1, r_large≈1 (continuation), r_small=rho
+        angle_large, angle_small = _murray_junction_angles(1.0, 1.0, rho)
+        # In sprouting, the large daughter stays closer to parent direction
+        angle_large = min(angle_large, 0.1)  # cap at ~6° for continuation
         return (angle_large, angle_small)
     end
 
-    # Branching regime: both daughters deflect
-    # Murray's law optimal angles using cos formula:
-    # cos(alpha_large) = (r_parent^4 + r_large^4 - r_small^4) / (2 * r_parent^2 * r_large^2)
-    # Simplified using rho = r_small/r_large:
-    # For the branching regime, use a linear interpolation from threshold to symmetric
-    t = (rho - rho_th) / (1.0 - rho_th + 1e-10)  # 0 at threshold, 1 at symmetric
+    # Branching regime: use Poiseuille-optimal angles
+    # Estimate radii from rho: r_parent=1, r_large≈1/sqrt(1+rho^(7/3))^(3/7), etc.
+    # Simpler: use rho directly as r_small/r_large ratio with r_parent from Murray's law
+    # r_parent^(7/3) = r_large^(7/3) + r_small^(7/3) = r_large^(7/3) * (1 + rho^(7/3))
+    # Let r_large = 1, r_small = rho, r_parent = (1 + rho^(7/3))^(3/7)
+    gamma = params.gamma
+    r_large = 1.0
+    r_small = rho
+    r_parent = (r_large^gamma + r_small^gamma)^(1.0 / gamma)
 
-    # At rho_th: minimal deflection; at rho=1: equal deflection
-    # Murray angle for symmetric bifurcation with gamma=7/3:
-    # cos(alpha) = (1 + 1 - 1) / (2*1*1) = 0.5 → alpha ≈ 60 deg → but with gamma=7/3 it differs
-    # Use energy-optimal formula: angle ≈ acos((1 + r_ratio^4 - (rho*r_ratio)^4)/(2*r_ratio^2))
-    # Simplified: symmetric angle ≈ 37 degrees (0.65 rad) for gamma=7/3
-
-    symmetric_angle = 0.65  # ~37 deg for gamma=7/3, both daughters
-    min_angle = 0.05        # near-zero at threshold
-
-    angle_total = min_angle + t * (2 * symmetric_angle - 2 * min_angle)
-
-    # Distribute: small daughter gets proportionally more deflection
-    # Weight by 1/(r^2) — smaller vessel deflects more
-    w_large = rho        # proportional to r_small (which means large vessel gets less)
-    w_small = 1.0
-
-    total_w = w_large + w_small
-    angle_large = angle_total * w_large / total_w / 2.0
-    angle_small = angle_total * w_small / total_w / 2.0
-
-    # Ensure small >= large
-    if angle_small < angle_large
-        angle_small, angle_large = angle_large, angle_small
-    end
-
-    return (angle_large, angle_small)
+    return _murray_junction_angles(r_parent, r_large, r_small)
 end
 
 """

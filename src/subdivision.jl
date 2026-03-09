@@ -83,8 +83,13 @@ end
     _random_daughter_direction(parent_dir, is_continuation, d_order, parent_order, rng)
 
 Compute a direction for a daughter segment based on parent direction.
-Continuation segments get small perturbation. Branches get larger offsets
-based on Barabasi sprouting/branching regimes.
+Continuation segments get small perturbation. Branches get offsets based on
+Poiseuille-optimal angles (Murray's law) with some noise.
+
+Angle ranges (physiological):
+- Continuation: 0–10° perturbation
+- Sprouting (rho < 0.83): 40–75° (side branch)
+- Branching (rho ≥ 0.83): 20–40° (Y-fork)
 """
 function _random_daughter_direction(
     parent_dir::NTuple{3,Float64},
@@ -96,17 +101,23 @@ function _random_daughter_direction(
     dx, dy, dz = parent_dir
 
     if is_continuation
-        # Continuation: small perturbation (< 15 degrees)
-        max_angle = 0.26  # ~15 degrees
+        # Continuation: small perturbation (< 10 degrees)
+        max_angle = 0.17  # ~10 degrees
     else
         # Branch: angle depends on order ratio (Barabasi-like)
-        rho = parent_order > 0 ? d_order / parent_order : 0.0
+        rho = parent_order > 0 ? Float64(d_order) / Float64(parent_order) : 0.0
         if rho < 0.83
-            # Sprouting: near-perpendicular
-            max_angle = Float64(π) / 2.0 * (0.7 + 0.6 * rand(rng))
+            # Sprouting: moderate-to-large angle (40°–75°)
+            # Murray's law: small daughter deflects ~50-70° for typical asymmetry
+            base_angle = 0.87  # ~50 degrees
+            noise = 0.44 * rand(rng) - 0.17  # range: -10° to +15°
+            max_angle = clamp(base_angle + noise, 0.70, 1.31)  # 40°–75°
         else
-            # Branching: moderate angle
-            max_angle = Float64(π) / 4.0 * (0.7 + 0.6 * rand(rng))
+            # Branching: moderate angle (20°–40°)
+            # Murray's law: ~25° for symmetric, up to ~35° for mild asymmetry
+            base_angle = 0.44  # ~25 degrees
+            noise = 0.26 * rand(rng) - 0.09  # range: -5° to +10°
+            max_angle = clamp(base_angle + noise, 0.35, 0.70)  # 20°–40°
         end
     end
 

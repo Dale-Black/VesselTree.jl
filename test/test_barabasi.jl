@@ -58,10 +58,12 @@ using Random
     # --- Junction angles ---
 
     @testset "compute_junction_angles — sprouting regime" begin
-        # rho < 0.83: large daughter continues straight (~0), small at ~90 deg
+        # rho < 0.83: large daughter nearly straight, small deflects moderately
+        # Poiseuille-optimal: small daughter ~60-75° for strong asymmetry
         angle_large, angle_small = compute_junction_angles(0.3, params)
-        @test angle_large ≈ 0.0 atol = 0.01
-        @test angle_small ≈ π / 2 atol = 0.15  # ~90 degrees
+        @test angle_large < 0.15  # continuation nearly straight
+        @test angle_small > 0.5   # side branch deflects significantly
+        @test angle_small <= 1.31 # but capped at ~75°
     end
 
     @testset "compute_junction_angles — branching regime (symmetric)" begin
