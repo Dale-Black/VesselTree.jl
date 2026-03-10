@@ -624,6 +624,405 @@ md"""
 Pure CCO growth with Murray's law radii (γ = 7/3) and inter-tree collision avoidance. Domain is an ellipsoid shell modeling the myocardial wall. Text files exported in Wenbo's format for flow simulation.
 """
 
+# ╔═╡ f1000001-0000-0000-0000-000000000001
+md"""
+## Step 11: Flow Simulation
+
+**1:1 port of Wenbo's Python `flow_simulation_2025_Nov.ipynb`.**
+
+Reads the exported `.txt` files, builds a binary tree, computes Poiseuille resistance with Pries (1994) in-vivo viscosity, prunes oversized leaf nodes ("leakages"), and solves for flow/pressure.
+
+**Changes from Python original:**
+- Fixed length unit: `length × 1e-6` (microns → meters), not `× 0.01`
+- Added pruning of oversized leaf nodes (leaked large vessels that were never subdivided)
+- Handles single-child nodes (series connection) after pruning
+
+| Python constant | Value | Julia name |
+|:----------------|:------|:-----------|
+| `Pin` | 100 mmHg × 133.32 = 13332.24 Pa | `FLOW_Pin` |
+| `Pout` | 5 mmHg × 133.32 = 666.61 Pa | `FLOW_Pout` |
+| `TOLERANCE` | 0.001 | `FLOW_TOLERANCE` |
+| `micron2m` | 1e-6 | `FLOW_micron2m` |
+| `m3pers2mLpermin` | 6e7 | `FLOW_m3s_to_mLmin` |
+"""
+
+# ╔═╡ f1000002-0000-0000-0000-000000000001
+begin
+	"""Vessel segment node for flow simulation (matches Python `Node` class)."""
+	mutable struct FlowNode
+		label::Int
+		parent_label::Int
+		diameter::Float64        # μm
+		len::Float64             # μm
+		direction::String
+		Rs::Float64              # Segment resistance (N·s/m⁵)
+		Rc::Float64              # Crown resistance (subtree equivalent)
+		Rs_decoupled::Float64    # Resistance used in iteration
+		pressure::Float64        # N/m²
+		flow::Float64            # m³/s
+		flow_old::Float64        # Previous iteration flow
+		parent::Union{FlowNode, Nothing}
+		left_branch::Union{FlowNode, Nothing}
+		right_branch::Union{FlowNode, Nothing}
+
+		function FlowNode(label, parent_label, diameter, len, direction)
+			new(label, parent_label, diameter, len, direction,
+				0.0, 0.0, 0.0,    # Rs, Rc, Rs_decoupled
+				0.0, 0.0, 0.0,    # pressure, flow, flow_old
+				nothing, nothing, nothing)
+		end
+	end
+
+	# Constants (matching Wenbo's Python exactly)
+	FLOW_mmHg2Pa      = 133.32239
+	FLOW_micron2m     = 1e-6
+	FLOW_m3s_to_mLmin = 1e6 * 60.0
+	FLOW_TOLERANCE    = 0.001
+	FLOW_Pin          = 100 * FLOW_mmHg2Pa   # 100 mmHg inlet
+	FLOW_Pout         = 5 * FLOW_mmHg2Pa     # 5 mmHg outlet
+end
+
+# ╔═╡ f1000003-0000-0000-0000-000000000001
+begin
+	# ── Pries (1994) in-vivo viscosity ──────────────────────────────────
+	# 1:1 port of Python calculate_viscosity_pries(diameter_um)
+	function flow_viscosity_pries(diameter_um::Float64)
+		D = max(diameter_um, 2.0)
+		Hd = 0.45
+		mu_plasma = 0.012   # Poise
+
+		term1 = 6.0 * exp(-0.085 * D)
+		term2 = 3.2 - 2.44 * exp(-0.06 * D^0.645)
+		mu_045_star = term1 + term2
+
+		term_c = (0.8 + exp(-0.075 * D)) *
+				 (-1.0 + 1.0 / (1.0 + 1e-11 * D^12)) +
+				 1.0 / (1.0 + 1e-11 * D^12)
+
+		viscosity_rel = (1.0 + (mu_045_star - 1.0) *
+						 ((1.0 - Hd)^term_c - 1.0) /
+						 ((1.0 - 0.45)^term_c - 1.0) *
+						 (D / (D - 1.1))^2) *
+						(D / (D - 1.1))^2
+
+		return viscosity_rel * mu_plasma * 0.1   # Poise → Pa·s
+	end
+
+	# ── Two-pass tree loader ───────────────────────────────────────────
+	# 1:1 port of Python load_unordered_tree(file_path)
+	function flow_load_tree(file_path::String)
+		println("Scanning file: $file_path...")
+		isfile(file_path) || (println("Error: File not found."); return nothing)
+
+		node_map = Dict{Int, FlowNode}()
+
+		# PASS 1: Create all nodes
+		for (line_num, line) in enumerate(eachline(file_path))
+			words = split(strip(line))
+			length(words) < 5 && continue
+			startswith(words[1], "#") && continue
+
+			label = parse(Int, words[1])
+			parent_label = parse(Int, words[2])
+			direction = lowercase(String(words[3]))
+			diameter = parse(Float64, words[4])
+			seg_len = parse(Float64, words[5])
+
+			if haskey(node_map, label)
+				println("Warning: Duplicate node label $label at line $line_num")
+				continue
+			end
+			node_map[label] = FlowNode(label, parent_label, diameter, seg_len, direction)
+		end
+
+		println("File loaded. Found $(length(node_map)) nodes. Linking tree structure...")
+
+		# PASS 2: Link parent ↔ child
+		tree_root = nothing
+		linked_count = 0
+
+		for (label, node) in node_map
+			if node.parent_label == -1
+				tree_root = node
+				println("Root found: Node $(node.label)")
+				continue
+			end
+			parent = get(node_map, node.parent_label, nothing)
+			if parent !== nothing
+				node.parent = parent
+				if node.direction == "l"
+					parent.left_branch = node
+				elseif node.direction == "r"
+					parent.right_branch = node
+				end
+				linked_count += 1
+			else
+				println("Warning: Node $label has missing parent $(node.parent_label)")
+			end
+		end
+
+		if tree_root === nothing
+			println("Critical Error: No root node (parent -1) found!")
+			return nothing
+		end
+		println("Tree linked successfully. $linked_count connections made.")
+		return tree_root
+	end
+
+	# ── Prune oversized leaf nodes ─────────────────────────────────────
+	# Removes "leaked" large vessels that were never subdivided
+	function flow_prune_leaves!(root::FlowNode; max_leaf_diameter_um::Float64=50.0)
+		pruned = 0
+		stack = FlowNode[root]
+		while !isempty(stack)
+			node = pop!(stack)
+			# Check left child
+			lc = node.left_branch
+			if lc !== nothing
+				is_leaf = lc.left_branch === nothing && lc.right_branch === nothing
+				if is_leaf && lc.diameter > max_leaf_diameter_um
+					node.left_branch = nothing
+					pruned += 1
+				else
+					push!(stack, lc)
+				end
+			end
+			# Check right child
+			rc = node.right_branch
+			if rc !== nothing
+				is_leaf = rc.left_branch === nothing && rc.right_branch === nothing
+				if is_leaf && rc.diameter > max_leaf_diameter_um
+					node.right_branch = nothing
+					pruned += 1
+				else
+					push!(stack, rc)
+				end
+			end
+		end
+		println("Pruned $pruned oversized leaf nodes (diameter > $max_leaf_diameter_um μm)")
+		return pruned
+	end
+
+	# ── Resistance calculation ─────────────────────────────────────────
+	# 1:1 port of Python update_tree_physics(current_node)
+	# Rs = 128·μ·L / (π·D⁴)  (Poiseuille's law)
+	# Rc = Rs + parallel(Rc_left, Rc_right) for bifurcations
+	#    = Rs + Rc_child for single-child nodes (after pruning)
+	#    = Rs for leaf nodes
+	function flow_update_physics!(node::Union{FlowNode, Nothing})
+		node === nothing && return 1e-20
+
+		mu = flow_viscosity_pries(node.diameter)
+		L_m = node.len * FLOW_micron2m          # μm → m (Python had * 0.01 bug)
+		D_m = node.diameter * FLOW_micron2m     # μm → m
+		L_m <= 0.0 && (L_m = 1e-9)
+
+		Rs_SI = (128.0 * mu * L_m) / (π * D_m^4)
+		Rs_SI < 1e-20 && (Rs_SI = 1e-20)
+		node.Rs = Rs_SI
+		node.Rs_decoupled = Rs_SI
+
+		Rc_left  = flow_update_physics!(node.left_branch)
+		Rc_right = flow_update_physics!(node.right_branch)
+
+		has_left  = node.left_branch !== nothing
+		has_right = node.right_branch !== nothing
+
+		if !has_left && !has_right
+			node.Rc = node.Rs
+		elseif has_left && has_right
+			R_par = (Rc_left * Rc_right) / (Rc_left + Rc_right)
+			node.Rc = node.Rs + R_par
+		elseif has_left
+			node.Rc = node.Rs + Rc_left
+		else
+			node.Rc = node.Rs + Rc_right
+		end
+		return node.Rc
+	end
+
+	# ── Flow/pressure propagation ─────────────────────────────────────
+	# 1:1 port of Python calculate_flow_pressure(upstream_node, error_sq)
+	function flow_calc_pressure!(node::FlowNode, error_sq::Float64)
+		has_left  = node.left_branch !== nothing
+		has_right = node.right_branch !== nothing
+
+		if !has_left && !has_right
+			error_sq += (node.flow - node.flow_old)^2
+			node.flow_old = node.flow
+			return error_sq
+		end
+
+		pressure_drop = node.flow * node.Rs_decoupled
+		P_bif = node.pressure - pressure_drop
+		ΔP = P_bif - FLOW_Pout
+
+		if has_left && has_right
+			node.left_branch.pressure  = P_bif
+			node.right_branch.pressure = P_bif
+			node.left_branch.flow  = ΔP / max(node.left_branch.Rc, 1e-20)
+			node.right_branch.flow = ΔP / max(node.right_branch.Rc, 1e-20)
+		elseif has_left
+			node.left_branch.pressure = P_bif
+			node.left_branch.flow = ΔP / max(node.left_branch.Rc, 1e-20)
+		else
+			node.right_branch.pressure = P_bif
+			node.right_branch.flow = ΔP / max(node.right_branch.Rc, 1e-20)
+		end
+
+		error_sq += (node.flow - node.flow_old)^2
+		node.flow_old = node.flow
+
+		has_left  && (error_sq = flow_calc_pressure!(node.left_branch, error_sq))
+		has_right && (error_sq = flow_calc_pressure!(node.right_branch, error_sq))
+		return error_sq
+	end
+
+	# ── Leaf node analysis ─────────────────────────────────────────────
+	# 1:1 port of Python analyze_leaf_nodes(root_node)
+	function flow_analyze_leaves(root::FlowNode)
+		leaves = FlowNode[]
+		stack = FlowNode[root]
+		while !isempty(stack)
+			n = pop!(stack)
+			if n.left_branch === nothing && n.right_branch === nothing
+				push!(leaves, n)
+			else
+				n.left_branch  !== nothing && push!(stack, n.left_branch)
+				n.right_branch !== nothing && push!(stack, n.right_branch)
+			end
+		end
+
+		diams = [n.diameter for n in leaves]
+		d_min, d_max = extrema(diams)
+		d_avg = sum(diams) / length(diams)
+		n_large = count(d -> d > 9.0, diams)
+		pct = round(n_large / length(diams) * 100; digits=2)
+
+		println("Total Leaf Nodes: $(length(leaves))")
+		println("Leaf Diameter Stats (microns):")
+		println("  Min: $(round(d_min; digits=2))")
+		println("  Max: $(round(d_max; digits=2))  <-- This number should not be really big")
+		println("  Avg: $(round(d_avg; digits=2))")
+		println("Count of 'Large Leaves' (>9.00 μm): $n_large ($pct%)")
+		return leaves
+	end
+
+	# ── Main driver ────────────────────────────────────────────────────
+	# 1:1 port of Python run_dcad_simulation(input_file_path)
+	function flow_run_simulation(file_path::String; max_leaf_diameter_um::Float64=50.0)
+		# 1. Load tree
+		root = flow_load_tree(file_path)
+		root === nothing && (println("Simulation aborted."); return nothing, nothing)
+
+		# 2. Prune oversized leaves
+		flow_prune_leaves!(root; max_leaf_diameter_um)
+
+		# 3. Calculate physics (Rs & Rc)
+		println("Calculating physics (Rs & Rc)...")
+		total_resistance = flow_update_physics!(root)
+		println("Total Tree Resistance: $(round(total_resistance; sigdigits=5)) N*s/m^5")
+
+		# 4. Initialize flow
+		root.pressure = FLOW_Pin
+		root.flow = (FLOW_Pin - FLOW_Pout) / root.Rc
+		root.flow_old = root.flow
+		flow_mLmin = root.flow * FLOW_m3s_to_mLmin
+		println("Initial Inlet Flow: $(round(flow_mLmin; digits=4)) mL/min")
+
+		# 5. Iterative solver (matches Python loop exactly)
+		println("Starting simulation loop...")
+		max_iterations = 50
+		converged = false
+
+		for iteration in 1:max_iterations
+			error_sq = flow_calc_pressure!(root, 0.0)
+			std_error = sqrt(error_sq)
+
+			iteration % 10 == 0 && println("Iteration $iteration: Error = $std_error")
+
+			if std_error < FLOW_TOLERANCE
+				converged = true
+				println("Simulation finished in $iteration iterations.")
+				break
+			end
+		end
+		converged || println("Simulation finished at max iterations ($max_iterations).")
+
+		final_flow = root.flow * FLOW_m3s_to_mLmin
+		println("Final Inlet Flow: $(round(final_flow; digits=4)) mL/min")
+
+		return root, final_flow
+	end
+
+	md"Flow simulation functions loaded."
+end
+
+# ╔═╡ f1000004-0000-0000-0000-000000000001
+md"""
+### Run Flow Simulation on Exported Trees
+
+Reads the `.txt` files exported in Step 10 and runs Wenbo's flow simulation on each artery.
+"""
+
+# ╔═╡ f1000005-0000-0000-0000-000000000001
+begin
+	flow_results = Dict{String, Tuple{FlowNode, Float64}}()
+
+	for name in ["LAD", "LCX", "RCA"]
+		txt_path = joinpath(export_dir, "$name.txt")
+		if isfile(txt_path)
+			println("\n" * "="^60)
+			println("  $name")
+			println("="^60)
+			root_node, final_flow = flow_run_simulation(txt_path; max_leaf_diameter_um=50.0)
+			if root_node !== nothing
+				flow_results[name] = (root_node, final_flow)
+				println()
+				flow_analyze_leaves(root_node)
+			end
+		else
+			println("Skipping $name — file not found: $txt_path")
+		end
+	end
+
+	println("\n" * "="^60)
+	println("  SUMMARY")
+	println("="^60)
+	for name in ["LAD", "LCX", "RCA"]
+		if haskey(flow_results, name)
+			_, flow_val = flow_results[name]
+			println("  $name: $(round(flow_val; digits=4)) mL/min")
+		end
+	end
+end
+
+# ╔═╡ f1000006-0000-0000-0000-000000000001
+begin
+	flow_summary_rows = String[]
+	for name in ["LAD", "LCX", "RCA"]
+		if haskey(flow_results, name)
+			root_n, flow_val = flow_results[name]
+			leaves = flow_analyze_leaves(root_n)
+			diams_f = [n.diameter for n in leaves]
+			d_min_f, d_max_f = extrema(diams_f)
+			d_avg_f = round(sum(diams_f) / length(diams_f); digits=1)
+			push!(flow_summary_rows, "| $name | $(round(flow_val; digits=4)) | $(length(leaves)) | $(round(d_min_f; digits=1)) | $(round(d_max_f; digits=1)) | $d_avg_f |")
+		end
+	end
+end
+
+# ╔═╡ 6277c28f-6ebe-4209-81d6-19e75cadc3e2
+Markdown.parse("""
+**Flow Simulation Results (Pries viscosity, 100 mmHg inlet, 5 mmHg outlet):**
+
+| Artery | Flow (mL/min) | Leaf Nodes | Min D (μm) | Max D (μm) | Avg D (μm) |
+|:-------|:--------------|:-----------|:-----------|:-----------|:-----------|
+$(join(flow_summary_rows, "\n"))
+
+*Oversized leaf nodes (>50 μm diameter) pruned before simulation.*
+""")
+
 # ╔═╡ Cell order:
 # ╠═d64a065b-258a-47df-86e4-eba5c8966829
 # ╠═38d9074f-a4ad-4ae0-9c22-4a57a9ecfaf3
@@ -665,3 +1064,10 @@ Pure CCO growth with Murray's law radii (γ = 7/3) and inter-tree collision avoi
 # ╠═188533a9-2b9b-4e53-89c8-ba8f82ce236e
 # ╟─d3000003-0000-0000-0000-000000000001
 # ╟─5f955173-ad5c-48ef-b4aa-dfbbf371713c
+# ╟─f1000001-0000-0000-0000-000000000001
+# ╠═f1000002-0000-0000-0000-000000000001
+# ╠═f1000003-0000-0000-0000-000000000001
+# ╟─f1000004-0000-0000-0000-000000000001
+# ╠═f1000005-0000-0000-0000-000000000001
+# ╠═f1000006-0000-0000-0000-000000000001
+# ╟─6277c28f-6ebe-4209-81d6-19e75cadc3e2
