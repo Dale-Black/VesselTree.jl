@@ -200,38 +200,39 @@ function coronary_tree_configs(domain::EllipsoidShellDomain)
     a, b, c = domain.semi_axes
     cx, cy, cz = domain.center
 
-    # Place roots on the upper portion of the outer ellipsoid surface
-    # using spherical parameterization: (a sinθ cosφ, b sinθ sinφ, c cosθ)
+    # Place roots at MID-SHELL radius (not outer surface!) so the root segment
+    # and subsequent bifurcation points stay inside the shell.
+    # The shell spans radial fraction [1-thickness, 1.0]; mid-shell = 1 - thickness/2.
+    f_mid = 1.0 - domain.thickness / 2.0
+
+    # Spherical parameterization: (a*f sinθ cosφ, b*f sinθ sinφ, c*f cosθ)
     # θ=0 is north pole (z=+c, superior), θ=π is south pole (z=-c, apex)
 
     # LAD: anterior, slightly left — courses down the anterior surface
-    # θ≈0.5 (near base), φ≈π/6 (anterior-left)
     θ_lad, φ_lad = 0.5, π / 6
-    pos_lad = (cx + a * sin(θ_lad) * cos(φ_lad),
-               cy + b * sin(θ_lad) * sin(φ_lad),
-               cz + c * cos(θ_lad))
+    pos_lad = (cx + a * f_mid * sin(θ_lad) * cos(φ_lad),
+               cy + b * f_mid * sin(θ_lad) * sin(φ_lad),
+               cz + c * f_mid * cos(θ_lad))
     dir_lad = _surface_tangent_down(domain, pos_lad)
 
     # LCX: left-posterior — courses around the left/back
-    # θ≈0.4 (near base), φ≈2π/3 (left-posterior)
     θ_lcx, φ_lcx = 0.4, 2π / 3
-    pos_lcx = (cx + a * sin(θ_lcx) * cos(φ_lcx),
-               cy + b * sin(θ_lcx) * sin(φ_lcx),
-               cz + c * cos(θ_lcx))
+    pos_lcx = (cx + a * f_mid * sin(θ_lcx) * cos(φ_lcx),
+               cy + b * f_mid * sin(θ_lcx) * sin(φ_lcx),
+               cz + c * f_mid * cos(θ_lcx))
     dir_lcx = _surface_tangent_down(domain, pos_lcx)
 
     # RCA: right-anterior — courses down the right side
-    # θ≈0.5 (near base), φ≈-π/4 (right-anterior)
     θ_rca, φ_rca = 0.5, -π / 4
-    pos_rca = (cx + a * sin(θ_rca) * cos(φ_rca),
-               cy + b * sin(θ_rca) * sin(φ_rca),
-               cz + c * cos(θ_rca))
+    pos_rca = (cx + a * f_mid * sin(θ_rca) * cos(φ_rca),
+               cy + b * f_mid * sin(θ_rca) * sin(φ_rca),
+               cz + c * f_mid * cos(θ_rca))
     dir_rca = _surface_tangent_down(domain, pos_rca)
 
     return [
-        TreeConfig("LAD", pos_lad, 1.5, dir_lad, 500, 0.40),
-        TreeConfig("LCX", pos_lcx, 1.2, dir_lcx, 300, 0.25),
-        TreeConfig("RCA", pos_rca, 1.3, dir_rca, 400, 0.35),
+        TreeConfig("LAD", pos_lad, 1.5, dir_lad, 3000, 0.40),
+        TreeConfig("LCX", pos_lcx, 1.2, dir_lcx, 2000, 0.25),
+        TreeConfig("RCA", pos_rca, 1.3, dir_rca, 2500, 0.35),
     ]
 end
 
@@ -531,6 +532,32 @@ function _project_tree_to_domain!(tree::VascularTree, domain::EllipsoidShellDoma
 end
 
 """
+    _effective_domain_volume(domain) -> Float64
+
+Compute the actual volume of the domain. For shell domains, this is the volume
+of the shell (not the bounding box). Used by the OpenCCO d_thresh formula.
+"""
+function _effective_domain_volume(domain::AbstractDomain)
+    if domain isa EllipsoidShellDomain
+        a, b, c = domain.semi_axes
+        inner = 1.0 - domain.thickness
+        return (4.0 / 3.0) * Float64(π) * a * b * c * (1.0 - inner^3)
+    elseif domain isa EllipsoidDomain
+        a, b, c = domain.semi_axes
+        return (4.0 / 3.0) * Float64(π) * a * b * c
+    elseif domain isa SphereDomain
+        return (4.0 / 3.0) * Float64(π) * domain.radius^3
+    elseif domain isa BoxDomain
+        dx = domain.max_corner[1] - domain.min_corner[1]
+        dy = domain.max_corner[2] - domain.min_corner[2]
+        dz = domain.max_corner[3] - domain.min_corner[3]
+        return dx * dy * dz
+    end
+    s = _domain_size(domain)
+    return s^3
+end
+
+"""
     _params_for_tree(name, default_params) -> MorphometricParams
 
 Auto-select per-artery Kassab params based on tree name.
@@ -607,11 +634,20 @@ function generate_kassab_coronary(
             cfg.root_position[2] + dy * root_len,
             cfg.root_position[3] + dz * root_len,
         )
+        # Ensure distal point stays inside the domain (tangent lines exit
+        # curved shells quickly). Project back if needed.
+        if !in_domain(domain, distal)
+            distal = project_to_domain(domain, distal)
+        end
         add_segment!(tree, cfg.root_position, distal, cfg.root_radius, Int32(-1))
         trees[cfg.name] = tree
     end
 
     # Phase 1: CCO skeleton growth
+    # Uses OpenCCO-inspired progressive domain expansion (IPOL Eq. 14-15):
+    #   - d_thresh from domain volume and target terminal count (not ad-hoc)
+    #   - search_radius GROWS as tree expands (progressive outward growth)
+    #   - min-distance check prevents degenerate short branches
     t_phase1 = time()
     if verbose
         println("Phase 1: CCO skeleton growth...")
@@ -628,12 +664,18 @@ function generate_kassab_coronary(
     added = Dict(cfg.name => 0 for cfg in cco_configs)
     domain_size = _domain_size(domain)
 
+    # Effective domain volume for OpenCCO d_thresh formula
+    domain_vol = _effective_domain_volume(domain)
+
     # Use CCO-sized buffers (not total_capacity) to save memory during CCO phase
     cco_buf_cap = skeleton_capacity
     buffers = Dict{String, NamedTuple}()
     grids = Dict{String, SpatialGrid}()
     last_rebuild = Dict{String, Int}()
     grid_rebuild_interval = 100
+
+    # Pre-allocate inter-tree collision buffers (avoid per-call allocation)
+    collision_bufs = Dict{String, Vector{Float64}}()
 
     for cfg in cco_configs
         buffers[cfg.name] = (
@@ -642,6 +684,7 @@ function generate_kassab_coronary(
             bifurc_t = zeros(cco_buf_cap),
             intersect = Vector{Bool}(undef, cco_buf_cap),
         )
+        collision_bufs[cfg.name] = zeros(cco_buf_cap)
         tree = trees[cfg.name]
         cs = _grid_cell_size(domain_size, max(tree.segments.n, 10))
         grids[cfg.name] = build_grid(tree.segments, tree.segments.n, domain, cs)
@@ -668,25 +711,48 @@ function generate_kassab_coronary(
             end
             grid = grids[cfg.name]
 
-            d_thresh = domain_size / (10.0 * (n + 1)^(1.0 / 3.0))
+            n_added = added[cfg.name]
+
+            # OpenCCO Eq. 15: d_thresh = (V / (k * (i+1)))^(1/3)
+            # Per-tree territory volume ≈ territory_fraction * domain_vol
+            territory_vol = cfg.territory_fraction * domain_vol
+            d_thresh = (territory_vol / (cfg.target_terminals * max(1, n_added + 1)))^(1.0 / 3.0)
+
+            # Search radius for spatial grid query (find K nearest segments).
+            # Use full domain size so CCO can connect to any reachable segment.
+            search_radius = domain_size * 2.0
 
             pt = sample_in_territory(domain, tmap, cfg.name, rng)
             pt === nothing && continue
 
             tx, ty, tz = pt
 
+            # Distance check against own tree: prevents degenerate short branches.
+            # No upper-bound rejection — let CCO fill the entire domain naturally.
+            # The K-nearest cost optimization handles connection quality.
+            if n > 0
+                compute_all_distances!(buf.distances, tree.segments, tx, ty, tz, n)
+                own_min_dist = AK.minimum(@view buf.distances[1:n])
+                own_min_dist < d_thresh && continue
+            end
+
+            # Inter-tree collision check (using pre-allocated buffers)
             collision = false
             for (other_name, other_tree) in trees
                 other_name == cfg.name && continue
-                if check_inter_tree_collision((tx, ty, tz), other_tree, d_thresh)
+                on = other_tree.segments.n
+                on == 0 && continue
+                cbuf = collision_bufs[other_name]
+                compute_all_distances!(cbuf, other_tree.segments, tx, ty, tz, on)
+                other_min = AK.minimum(@view cbuf[1:on])
+                if other_min < d_thresh
                     collision = true
                     break
                 end
             end
             collision && continue
 
-            K = min(n, 20)
-            search_radius = d_thresh * 5.0
+            K = min(n, 40)
             nearest = _find_nearest_via_grid(grid, tree.segments, buf.distances, tx, ty, tz, search_radius, K, n)
 
             seg_idx = 0

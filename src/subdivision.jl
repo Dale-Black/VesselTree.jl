@@ -198,8 +198,9 @@ end
 """
     _sample_segment_length(order, params, rng) -> Float64
 
-Sample segment length (mm) from per-order distribution. Uses truncated Normal
-to avoid negative or unreasonably small lengths.
+Sample segment length (mm) from per-order lognormal distribution.
+Kassab length data is right-skewed; lognormal matches the empirical shape.
+Parameters are converted from the stored Normal (mean, sd) to lognormal.
 """
 function _sample_segment_length(order::Int, params::MorphometricParams, rng::AbstractRNG)
     idx = order + 1
@@ -208,10 +209,13 @@ function _sample_segment_length(order::Int, params::MorphometricParams, rng::Abs
     end
     mean_um = params.length_mean[idx]
     sd_um = params.length_sd[idx]
-    min_um = max(params.vessel_cutoff_um, mean_um * 0.1)  # at least 10% of mean
-    # Truncated Normal: sample until we get a valid value (simple rejection)
+    # Convert Normal(mean, sd) → LogNormal(μ_ln, σ_ln)
+    cv2 = (sd_um / mean_um)^2
+    σ_ln = sqrt(log1p(cv2))
+    μ_ln = log(mean_um) - 0.5 * σ_ln^2
+    min_um = max(params.vessel_cutoff_um, mean_um * 0.1)
     for _ in 1:10
-        l = mean_um + randn(rng) * sd_um
+        l = exp(μ_ln + σ_ln * randn(rng))
         l >= min_um && return l / 1000.0  # um → mm
     end
     return mean_um / 1000.0  # fallback to mean
@@ -283,12 +287,12 @@ end
     _subdivide_recursive!(tree, parent_idx, parent_order, params, rng)
 
 Recursively subdivide a single segment into daughters per Kassab CM.
-Uses a bifurcation chain: each daughter peels off via a proper bifurcation
-with a continuation segment that maintains the parent's order.
+Uses a bifurcation chain with a terminal bifurcation:
+- Internal junctions: daughter peels off + continuation maintains parent order
+- Terminal junction: both children are new daughter elements (no continuation)
 
-For N daughters, creates N bifurcations (each with daughter + continuation).
-The continuation segments form the parent element (S/E = N+1).
-Only the daughter segments are recursively subdivided.
+For N daughters: N-2 internal bifurcations + 1 terminal → S/E = N-1 (for N>=2).
+This matches Kassab's S/E ratios where CM column sum ≈ S/E + 1.
 """
 function _subdivide_recursive!(
     tree::VascularTree,
@@ -334,16 +338,28 @@ function _subdivide_recursive!(
     # Sort daughters by order ascending — peel off smallest first (most asymmetric)
     sort!(daughters)
 
-    # Build bifurcation chain: each daughter gets its own bifurcation point
+    # Build bifurcation chain with terminal bifurcation.
+    # In Kassab's framework, an element of K segments has:
+    #   - K-1 internal junctions (each peels off 1 daughter + 1 continuation)
+    #   - 1 terminal junction (both children are new elements, no continuation)
+    # This gives S/E = K, and total daughters = K+1 ≈ CM column sum.
+    #
+    # For N daughters drawn from CM:
+    #   N >= 2: first N-2 internal bifurcations + 1 terminal (2 daughters)
+    #           S/E = (N-2) + 1 = N-1
+    #   N = 1:  single internal bifurcation (daughter + continuation), S/E = 2
+    #   N = 0:  terminal leaf (handled above)
     current_parent = parent_idx
+    n_daughters = length(daughters)
 
-    for i in eachindex(daughters)
+    # Number of internal bifurcations (daughter + continuation)
+    n_internal = n_daughters >= 2 ? n_daughters - 2 : n_daughters
+
+    for i in 1:n_internal
         d_order = daughters[i]
         r_parent = seg.radius[current_parent]
 
         # CM-implied asymmetry: D_elem(daughter)/D_elem(parent) with noise
-        # Grounded in Kassab 1993 element diameters, not generic Beta distribution.
-        # No floor clamp: Murray's law holds exactly at every junction.
         asymmetry = _cm_implied_asymmetry(d_order, parent_order, params, rng)
         r_large, r_small = compute_daughter_radii(r_parent, asymmetry, gamma)
 
@@ -361,14 +377,12 @@ function _subdivide_recursive!(
         d_length = _sample_segment_length(d_order, params, rng)
         d_dir = _random_daughter_direction(current_dir, false, d_order, parent_order, rng)
 
-        # Shell domain: project direction to surface tangent so segments follow the shell
         if domain isa EllipsoidShellDomain
             d_dir = _shell_tangent_project(domain, bp, d_dir)
         end
 
         d_distal = (bp_x + d_dir[1] * d_length, bp_y + d_dir[2] * d_length, bp_z + d_dir[3] * d_length)
 
-        # Domain constraint: project distal point back into domain if outside
         if domain !== nothing && !in_domain(domain, d_distal)
             d_distal = project_to_domain(domain, d_distal)
         end
@@ -380,14 +394,12 @@ function _subdivide_recursive!(
         c_length = _sample_segment_length(parent_order, params, rng)
         c_dir = _random_daughter_direction(current_dir, true, parent_order, parent_order, rng)
 
-        # Shell domain: project continuation direction to surface tangent
         if domain isa EllipsoidShellDomain
             c_dir = _shell_tangent_project(domain, bp, c_dir)
         end
 
         c_distal = (bp_x + c_dir[1] * c_length, bp_y + c_dir[2] * c_length, bp_z + c_dir[3] * c_length)
 
-        # Domain constraint: project continuation distal point too
         if domain !== nothing && !in_domain(domain, c_distal)
             c_distal = project_to_domain(domain, c_distal)
         end
@@ -414,6 +426,59 @@ function _subdivide_recursive!(
         current_dir = c_dir
     end
 
-    # current_parent is the terminal end of the element — NOT further subdivided
-    # (all daughters for this element have been accounted for by the CM entry)
+    # Terminal bifurcation: last 2 daughters share a junction (no continuation).
+    # The element ends here — both children start new elements.
+    if n_daughters >= 2
+        d1_order = daughters[n_daughters - 1]
+        d2_order = daughters[n_daughters]
+        r_parent = seg.radius[current_parent]
+
+        bp_x = seg.distal_x[current_parent]
+        bp_y = seg.distal_y[current_parent]
+        bp_z = seg.distal_z[current_parent]
+        bp = (bp_x, bp_y, bp_z)
+
+        # Split radius between 2 daughters using their relative element diameters
+        if d1_order >= d2_order
+            asym = _cm_implied_asymmetry(d2_order, max(d1_order, 1), params, rng)
+            r_large, r_small = compute_daughter_radii(r_parent, asym, gamma)
+            d1_radius, d2_radius = r_large, r_small
+        else
+            asym = _cm_implied_asymmetry(d1_order, max(d2_order, 1), params, rng)
+            r_large, r_small = compute_daughter_radii(r_parent, asym, gamma)
+            d1_radius, d2_radius = r_small, r_large
+        end
+
+        # Daughter 1
+        d1_length = _sample_segment_length(d1_order, params, rng)
+        d1_dir = _random_daughter_direction(current_dir, false, d1_order, parent_order, rng)
+        if domain isa EllipsoidShellDomain
+            d1_dir = _shell_tangent_project(domain, bp, d1_dir)
+        end
+        d1_distal = (bp_x + d1_dir[1] * d1_length, bp_y + d1_dir[2] * d1_length, bp_z + d1_dir[3] * d1_length)
+        if domain !== nothing && !in_domain(domain, d1_distal)
+            d1_distal = project_to_domain(domain, d1_distal)
+        end
+        d1_id = add_segment!(tree, bp, d1_distal, d1_radius, Int32(current_parent))
+        tree.topology.strahler_order[d1_id] = Int32(d1_order)
+
+        # Daughter 2
+        d2_length = _sample_segment_length(d2_order, params, rng)
+        d2_dir = _random_daughter_direction(current_dir, false, d2_order, parent_order, rng)
+        if domain isa EllipsoidShellDomain
+            d2_dir = _shell_tangent_project(domain, bp, d2_dir)
+        end
+        d2_distal = (bp_x + d2_dir[1] * d2_length, bp_y + d2_dir[2] * d2_length, bp_z + d2_dir[3] * d2_length)
+        if domain !== nothing && !in_domain(domain, d2_distal)
+            d2_distal = project_to_domain(domain, d2_distal)
+        end
+        d2_id = add_segment!(tree, bp, d2_distal, d2_radius, Int32(current_parent))
+        tree.topology.strahler_order[d2_id] = Int32(d2_order)
+
+        # Recursively subdivide both daughters
+        d1_order > 0 && _subdivide_recursive!(tree, Int(d1_id), d1_order, params, rng, domain)
+        d2_order > 0 && _subdivide_recursive!(tree, Int(d2_id), d2_order, params, rng, domain)
+    end
+    # For N=1: handled by the internal loop above (1 daughter + continuation)
+    # For N=0: handled by the isempty check above
 end

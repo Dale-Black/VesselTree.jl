@@ -163,13 +163,21 @@ function signed_distance(d::EllipsoidShellDomain, point)
 end
 
 function sample_point(d::EllipsoidShellDomain, rng::AbstractRNG)
-    while true
-        x = d.center[1] + d.semi_axes[1] * (2.0 * rand(rng) - 1.0)
-        y = d.center[2] + d.semi_axes[2] * (2.0 * rand(rng) - 1.0)
-        z = d.center[3] + d.semi_axes[3] * (2.0 * rand(rng) - 1.0)
-        p = (x, y, z)
-        in_domain(d, p) && return p
-    end
+    # Parametric sampling: 100% acceptance, volumetrically uniform in the shell.
+    # The shell consists of nested similar ellipsoids at radial fraction f ∈ [1-t, 1].
+    # Volume element ∝ f² df sinθ dθ dφ, so sample f³ uniformly for uniform volume.
+    a, b, c = d.semi_axes
+    t = d.thickness
+    cosθ = 2.0 * rand(rng) - 1.0
+    sinθ = sqrt(max(0.0, 1.0 - cosθ * cosθ))
+    φ = 2.0 * Float64(π) * rand(rng)
+    f_min3 = (1.0 - t)^3
+    f = cbrt(f_min3 + (1.0 - f_min3) * rand(rng))
+    return (
+        d.center[1] + a * f * sinθ * cos(φ),
+        d.center[2] + b * f * sinθ * sin(φ),
+        d.center[3] + c * f * cosθ,
+    )
 end
 
 # --- project_to_domain ---

@@ -322,6 +322,79 @@ function _write_json(io::IO, x::Number)
 end
 
 """
+    export_wenbo_txt(tree::VascularTree, filename)
+
+Export tree in Wenbo's text format for flow simulation. Each line has 11
+whitespace-separated columns:
+
+    node_id  parent_id  direction  diameter(μm)  length(μm)  0  0  0  x  y  z
+
+- IDs are 0-indexed (node 0 = root with parent -1)
+- Direction: "r" (right/first child) or "l" (left/second child); root = "r"
+- Coordinates are the distal endpoint position in the same units as the tree
+  (mm by default in VesselTree.jl)
+- Diameter and length are converted from mm to μm (×2000 and ×1000)
+"""
+function export_wenbo_txt(tree::VascularTree, filename::AbstractString)
+    n = tree.segments.n
+    seg = tree.segments
+    topo = tree.topology
+
+    # Build a direction map: is this segment child1 ("r") or child2 ("l") of its parent?
+    direction = fill("r", n)
+    for i in 1:n
+        pid = Int(topo.parent_id[i])
+        pid <= 0 && continue
+        if Int(topo.child2_id[pid]) == i
+            direction[i] = "l"
+        end
+        # child3 (trifurcation) — rare, mark as "l"
+        if Int(topo.child3_id[pid]) == i
+            direction[i] = "l"
+        end
+    end
+
+    open(filename, "w") do io
+        for i in 1:n
+            node_id = i - 1  # 0-indexed
+            parent_id = Int(topo.parent_id[i]) <= 0 ? -1 : Int(topo.parent_id[i]) - 1
+            diam_um = seg.radius[i] * 2000.0      # radius (mm) → diameter (μm)
+            len_um = seg.seg_length[i] * 1000.0    # mm → μm
+            dir = direction[i]
+            # Distal endpoint as node position
+            x = seg.distal_x[i]
+            y = seg.distal_y[i]
+            z = seg.distal_z[i]
+
+            println(io,
+                lpad(node_id, 6), "  ", lpad(parent_id, 6), "  ", dir, "  ",
+                lpad(string(round(diam_um, digits=6)), 12), "  ",
+                lpad(string(round(len_um, digits=6)), 12), "  ",
+                "    0  ", "    0  ", "    0  ",
+                lpad(string(round(x, digits=6)), 12), "  ",
+                lpad(string(round(y, digits=6)), 12), "  ",
+                lpad(string(round(z, digits=6)), 12))
+        end
+    end
+    return filename
+end
+
+"""
+    export_forest_wenbo_txt(forest::CoronaryForest, directory)
+
+Export each tree as a separate Wenbo-format text file.
+"""
+function export_forest_wenbo_txt(forest::CoronaryForest, directory::AbstractString)
+    isdir(directory) || mkpath(directory)
+    paths = String[]
+    for (name, tree) in sort(collect(forest.trees), by=x -> x[1])
+        filepath = joinpath(directory, "$(name).txt")
+        push!(paths, export_wenbo_txt(tree, filepath))
+    end
+    return paths
+end
+
+"""
     export_csv(tree::VascularTree, filename)
 
 Export all segments as a flat CSV for spreadsheet analysis.

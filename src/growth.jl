@@ -277,10 +277,17 @@ function grow_tree!(
             last_rebuild_n = n
         end
 
-        # Adaptive minimum distance
-        d_thresh = domain_size / (10.0 * (n + 1)^(1.0 / 3.0))
+        # OpenCCO Eq. 15: d_thresh = (V / (k * (i+1)))^(1/3)
+        # Uses domain volume and target terminal count for principled spacing
+        domain_vol = domain_size^3  # approximate; for shells use _effective_domain_volume
+        d_thresh = (domain_vol / (n_terminals * max(1, added + 1)))^(1.0 / 3.0)
 
-        # Sample candidate point
+        # Progressive expansion: search radius grows from near-root to full domain
+        # Must be >= d_thresh * 2 so the annulus [d_thresh, search_radius] is non-empty
+        growth_frac = min(1.0, (added + 1.0) / n_terminals)
+        search_radius = max(domain_size * (0.1 + 0.9 * cbrt(growth_frac)), d_thresh * 2.0)
+
+        # Sample candidate point (checks min distance via d_thresh internally)
         candidate = sample_terminal_candidate(domain, tree, d_thresh, distances_buf, rng)
         if candidate === nothing
             continue
@@ -289,8 +296,7 @@ function grow_tree!(
         tx, ty, tz = candidate
 
         # Find best connection among K nearest segments using spatial grid
-        K = min(n, 20)
-        search_radius = d_thresh * 5.0  # search wider than d_thresh for good candidates
+        K = min(n, 40)
         nearest = _find_nearest_via_grid(grid, tree.segments, distances_buf, tx, ty, tz, search_radius, K, n)
 
         seg_idx = 0

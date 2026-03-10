@@ -71,6 +71,7 @@ export estimate_total_segments, estimate_subdivision_capacity, subdivide_termina
 export CoronaryForest, generate_coronary_forest, generate_kassab_coronary, validate_forest
 export save_tree, load_tree, export_centerlines_vtp, export_forest_vtp
 export export_stl, export_graph_json, export_csv
+export export_wenbo_txt, export_forest_wenbo_txt
 
 # Visualization stubs (implemented by VesselTreeMakieExt when CairoMakie is loaded)
 function plot_tree end

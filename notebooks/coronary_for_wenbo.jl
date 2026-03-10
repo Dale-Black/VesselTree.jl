@@ -4,93 +4,65 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ a1000001-b000-4c00-8d00-e00000000002
+# ╔═╡ d64a065b-258a-47df-86e4-eba5c8966829
 begin
 	import Pkg
 	Pkg.activate(dirname(@__DIR__))
 end
 
-# ╔═╡ f4c0b7fb-637d-4bd7-adff-4a06fe91c081
+# ╔═╡ 38d9074f-a4ad-4ae0-9c22-4a57a9ecfaf3
 # ╠═╡ show_logs = false
 using VesselTree
 
-# ╔═╡ 4378fe0a-1dd5-4b66-b6ae-b0668e12b944
+# ╔═╡ 6f7c71c6-a2c4-4e69-af63-3cc382df760d
 using CairoMakie
 
-# ╔═╡ fb9ffd67-0ab9-4974-ba52-d64742a58a08
-using Random, Statistics
+# ╔═╡ 86de57c5-bb12-425f-a2d3-218f805f6761
+using Random
 
-# ╔═╡ w0000001-0000-0000-0000-000000000001
+# ╔═╡ e5c54f95-2461-46e7-9870-d411df930300
+using Statistics
+
+# ╔═╡ e4965a7a-0800-49fb-93b9-be63caf2111f
 md"""
 # Coronary Arterial Tree Generation — VesselTree.jl
 
-This notebook demonstrates VesselTree.jl's coronary artery generation pipeline. It mirrors the goals of the svVascularize (Python) workflow but uses a physiologically correct approach:
-
-| Feature | svVascularize (Python) | VesselTree.jl |
-|:--------|:----------------------|:--------------|
-| Domain | Solid volume (Delaunay3D) | **Ellipsoid shell** (myocardial wall) |
-| Growth | CCO only via `forest.add(1)` | **CCO + Kassab subdivision** to capillaries |
-| Murray's law | svv internal (unverified γ) | **γ = 7/3** (Huo-Kassab 2007) |
-| Junction geometry | None | **Barabasi 2026** (sprouting vs branching) |
-| Morphometry | None | **Kassab 1993** per-artery connectivity matrix |
-| Validation | None | **9-metric report card** vs Kassab reference |
-| Stopping | Fixed N_ADD iterations | **Target terminals** + diameter monitoring |
-| Speed | ~22ms/terminal (Python) | **<1ms/terminal** (Julia) |
-
-**Key anatomical point:** coronary arteries course along the epicardium — the outer surface of the heart — within the myocardial wall (~10-15mm thick). They do NOT fill the heart chambers. A shell domain is anatomically correct; a solid volume is not.
+Pure CCO (Constrained Constructive Optimization) growth matching the svVascularize approach. Murray's law radii (γ = 7/3). Domain is an ellipsoid shell modeling the myocardial wall.
 """
 
-# ╔═╡ w0000002-0000-0000-0000-000000000002
+# ╔═╡ 87657f8c-3c2b-4f06-b89d-b77de7bdae8b
 md"""
 ## Step 1: Define the Heart Domain
 
-The domain is an **ellipsoid shell** modeling the myocardial wall. Semi-axes approximate a human heart:
-- **a = 50mm** (left-right)
-- **b = 35mm** (anterior-posterior)
-- **c = 45mm** (base-apex)
-- **thickness = 30%** of semi-axis (outer → inner = 70% radius)
-
-This gives a wall thickness of ~10-15mm, matching real myocardium.
-
-> **Compare to Wenbo's approach:** `Delaunay3D(alpha=0.0)` creates a solid volume from surface points. Vessels would grow through the blood-filled ventricles — anatomically wrong. The shell constrains growth to where coronary arteries actually live.
+The domain is an **ellipsoid shell** modeling the myocardial wall:
+- **a = 50mm** (left-right), **b = 35mm** (anterior-posterior), **c = 45mm** (base-apex)
+- **thickness = 30%** → wall ~10-15mm, matching real myocardium
 """
 
-# ╔═╡ w0000003-0000-0000-0000-000000000003
-begin
-	domain = default_coronary_domain()  # EllipsoidShellDomain
-	md"""
-	**Domain:** `EllipsoidShellDomain`
-	- Center: $(domain.center)
-	- Semi-axes: $(domain.semi_axes) mm
-	- Shell thickness: $(domain.thickness) ($(round(domain.thickness * 100))%)
-	- Wall thickness: ~$(round(minimum(domain.semi_axes) * domain.thickness, digits=1)) – $(round(maximum(domain.semi_axes) * domain.thickness, digits=1)) mm
-	"""
-end
+# ╔═╡ bd7d2e5c-f5ea-4dad-a131-0b61d4b99de6
+domain = default_coronary_domain()  # EllipsoidShellDomain
 
-# ╔═╡ w0000004-0000-0000-0000-000000000004
+# ╔═╡ 7f5bdb8c-d128-4324-9b57-db15adac6de3
+md"""
+**Domain:** `EllipsoidShellDomain`
+- Center: $(domain.center)
+- Semi-axes: $(domain.semi_axes) mm
+- Shell thickness: $(domain.thickness) ($(round(domain.thickness * 100))%)
+- Wall thickness: ~$(round(minimum(domain.semi_axes) * domain.thickness, digits=1)) – $(round(maximum(domain.semi_axes) * domain.thickness, digits=1)) mm
+"""
+
+# ╔═╡ 28d33479-2192-4cc2-8e2f-d1dd2772fb69
 md"""
 ## Step 2: Define Root Positions (Seed Points)
-
-Three coronary arteries originate from the aortic root near the top of the heart:
 
 | Artery | Territory | Anatomical Position |
 |:-------|:----------|:-------------------|
 | **LAD** | Anterior wall (40%) | Anterior, slightly left |
 | **LCX** | Left/posterior wall (25%) | Left-posterior |
 | **RCA** | Right wall (35%) | Right-anterior |
-
-Root positions are placed ON the ellipsoid surface at anatomically motivated locations. Growth directions are tangent to the surface, pointing toward the apex.
-
-> **Compare to Wenbo's seeds:**
-> ```python
-> "LAD": {"coord": [1.37769, 0.393763, 3.1823],  "radius": 0.18}  # cm
-> "LCX": {"coord": [1.36868, 0.383006, 3.00845], "radius": 0.165} # cm
-> "RCA": {"coord": [6.30361, 3.29052, 2.88375],  "radius": 0.2}   # cm
-> ```
-> Note: LAD and LCX are very close together (Δ < 0.2cm), while RCA is ~5cm away. In VesselTree.jl, we place seeds using anatomical angles on the ellipsoid.
 """
 
-# ╔═╡ w0000005-0000-0000-0000-000000000005
+# ╔═╡ b26965de-6069-4c3d-a9c9-8be15d74bf10
 begin
 	configs = VesselTree.coronary_tree_configs(domain)
 
@@ -98,59 +70,43 @@ begin
 		"| $(cfg.name) | ($(round.(cfg.root_position, digits=1))) | $(cfg.root_radius) mm | $(cfg.target_terminals) | $(round(cfg.territory_fraction * 100))% |"
 		for cfg in configs
 	], "\n")
+end;
 
-	Markdown.parse("""
-	| Artery | Root Position (mm) | Root Radius | Target Terminals | Territory |
-	|:-------|:-------------------|:------------|:-----------------|:----------|
-	$config_rows
-	""")
-end
+# ╔═╡ 52055f05-592d-473a-88a8-eb4a5034065d
+Markdown.parse("""
+| Artery | Root Position (mm) | Root Radius | Target Terminals | Territory |
+|:-------|:-------------------|:------------|:-----------------|:----------|
+$config_rows
+""")
 
-# ╔═╡ w0000006-0000-0000-0000-000000000006
+# ╔═╡ 6df19e82-fa9f-4e26-bc54-7199d330abb8
 md"""
-## Step 3: Morphometric Parameters (Kassab 1993)
+## Step 3: Growth Parameters
 
-VesselTree.jl uses **per-artery** Kassab morphometric data:
-- **Connectivity matrix** — how many daughters of each Strahler order
-- **Diameter distributions** — mean ± std per order (element-level and segment-level)
-- **Length distributions** — mean ± std per order
-- **12 Strahler orders** — from capillaries (~8μm) to main stems (~3-5mm)
-
-This is what enables subdivision from a CCO skeleton down to capillaries.
+Murray's law exponent γ = 7/3 (Huo-Kassab 2007). Per-artery Kassab morphometric params provide terminal radii for CCO handoff.
 """
 
-# ╔═╡ w0000007-0000-0000-0000-000000000007
-begin
-	params_lad = kassab_lad_params()
-	params_lcx = kassab_lcx_params()
-	params_rca = kassab_rca_params()
+# ╔═╡ 33573674-ea88-406b-b3c6-9013b976ee37
+params_rca = kassab_rca_params();
 
-	md"""
-	| Artery | Orders | γ (Murray) | Min Diameter | Max Diameter |
-	|:-------|:-------|:-----------|:-------------|:-------------|
-	| LAD | $(params_lad.n_orders) | $(params_lad.gamma) | $(round(params_lad.diameter_mean[1], digits=1)) μm | $(round(params_lad.diameter_mean[end], digits=0)) μm |
-	| LCX | $(params_lcx.n_orders) | $(params_lcx.gamma) | $(round(params_lcx.diameter_mean[1], digits=1)) μm | $(round(params_lcx.diameter_mean[end], digits=0)) μm |
-	| RCA | $(params_rca.n_orders) | $(params_rca.gamma) | $(round(params_rca.diameter_mean[1], digits=1)) μm | $(round(params_rca.diameter_mean[end], digits=0)) μm |
-	"""
-end
-
-# ╔═╡ w0000008-0000-0000-0000-000000000008
+# ╔═╡ 0a987a32-e3d5-44c5-b6a9-d2cf0b29bde1
 md"""
-## Step 4: CCO Skeleton Growth (Progressive)
-
-Like svVascularize's `forest.add(1)`, VesselTree.jl grows trees **simultaneously** via round-robin: each iteration adds one terminal to each tree, with inter-tree collision avoidance and territory partitioning.
-
-Let's watch the LAD grow progressively to verify it wraps around the shell correctly.
+γ = $(params_rca.gamma), $(params_rca.n_orders) Strahler orders
 """
 
-# ╔═╡ w0000009-0000-0000-0000-000000000009
-begin
-	# Helper: plot vessels in 3D with linewidth ∝ radius
-	function plot_vessels_3d!(ax, seg, n; color=:red, min_diam_um=0.0, nbins=15)
-		vis = [i for i in 1:n if seg.radius[i] * 2000 >= min_diam_um]
-		isempty(vis) && return
+# ╔═╡ acb6d732-8524-4e60-85d3-a5bc4fa56d86
+md"""
+## Step 4: CCO Progressive Growth (LAD only)
 
-		raw_w = [clamp(Float32(seg.radius[i] * 2000 / 50), 0.3f0, 8.0f0) for i in vis]
+Watch the LAD grow progressively to verify it wraps around the shell correctly.
+"""
+
+# ╔═╡ 7fcc9a94-7cf4-4fdb-9e22-6e3bacd643a2
+begin
+	"""Plot vessels with single color, linewidth ∝ radius."""
+	function plot_vessels_3d!(ax, seg, n; color=:red, nbins=15)
+		n == 0 && return
+		raw_w = [clamp(Float32(seg.radius[i] * 2000 / 50), 0.3f0, 8.0f0) for i in 1:n]
 		wmin, wmax = extrema(raw_w)
 		wmax == wmin && (wmax = wmin + 1f0)
 
@@ -159,10 +115,9 @@ begin
 			hi = wmin + b * (wmax - wmin) / nbins
 			bw = (lo + hi) / 2
 			pts = Point3f[]
-			for k in eachindex(vis)
-				w = raw_w[k]
+			for i in 1:n
+				w = raw_w[i]
 				if (b == nbins ? w >= lo : lo <= w < hi)
-					i = vis[k]
 					push!(pts, Point3f(seg.proximal_x[i], seg.proximal_y[i], seg.proximal_z[i]))
 					push!(pts, Point3f(seg.distal_x[i], seg.distal_y[i], seg.distal_z[i]))
 				end
@@ -173,21 +128,198 @@ begin
 		end
 	end
 
+	"""
+	Depth-based visualization matching Wenbo's `plot_tree_3d_depth_with_level_stats`.
+	Color = depth from root. Linewidth = radius (percentile-scaled).
+	`max_depth` filters how many levels from root to show.
+	"""
+	function plot_tree_3d_depth!(ax, tree;
+			max_depth=typemax(Int), max_segments=typemax(Int),
+			lw_min=0.3, lw_max=5.0, alpha=0.9)
+		seg = tree.segments
+		topo = tree.topology
+		n = seg.n
+		n == 0 && return 0
+
+		# BFS depth from root
+		depth = fill(-1, n)
+		queue = Int[]
+		for i in 1:n
+			if Int(topo.parent_id[i]) <= 0
+				depth[i] = 0
+				push!(queue, i)
+			end
+		end
+		local h = 1
+		while h <= length(queue)
+			i = queue[h]; h += 1
+			for cid_raw in (topo.child1_id[i], topo.child2_id[i], topo.child3_id[i])
+				cid = Int(cid_raw)
+				(cid <= 0 || cid > n) && continue
+				depth[cid] = depth[i] + 1
+				push!(queue, cid)
+			end
+		end
+
+		# Collect edges filtered by depth
+		edges = Tuple{Int,Int,Int}[]
+		for i in 1:n
+			(depth[i] < 0 || depth[i] >= max_depth) && continue
+			for cid_raw in (topo.child1_id[i], topo.child2_id[i], topo.child3_id[i])
+				cid = Int(cid_raw)
+				(cid <= 0 || cid > n) && continue
+				push!(edges, (i, cid, depth[cid]))
+			end
+		end
+		isempty(edges) && return 0
+
+		if length(edges) > max_segments
+			idx = sort(Random.shuffle(collect(1:length(edges)))[1:max_segments])
+			edges = edges[idx]
+		end
+
+		# Color palette per depth
+		depth_colors = [
+			RGBf(0.8, 0.1, 0.1),    # 0 red
+			RGBf(0.0, 0.45, 0.85),   # 1 blue
+			RGBf(0.2, 0.7, 0.3),     # 2 green
+			RGBf(0.85, 0.55, 0.0),   # 3 orange
+			RGBf(0.6, 0.2, 0.8),     # 4 purple
+			RGBf(0.0, 0.7, 0.7),     # 5 cyan
+			RGBf(0.9, 0.4, 0.6),     # 6 pink
+			RGBf(0.5, 0.5, 0.0),     # 7 olive
+			RGBf(0.4, 0.4, 0.7),     # 8 slate
+			RGBf(0.7, 0.3, 0.3),     # 9 brown
+			RGBf(0.5, 0.6, 0.5),     # 10
+			RGBf(0.6, 0.4, 0.2),     # 11
+		]
+
+		# Linewidth from radius
+		radii = [Float64(seg.radius[c]) for (_, c, _) in edges]
+		r0, r1 = length(radii) >= 10 ?
+			(quantile(radii, 0.05), quantile(radii, 0.95)) : extrema(radii)
+		denom = max(r1 - r0, 1e-12)
+
+		edge_lw = [lw_min + clamp((Float64(seg.radius[c]) - r0) / denom, 0.0, 1.0) * (lw_max - lw_min) for (_, c, _) in edges]
+
+		# Draw deepest first (behind), shallowest last (on top)
+		max_d = maximum(e[3] for e in edges)
+		nbins = 15
+		for d in max_d:-1:0
+			d_idx = [k for (k, (_, _, ed)) in enumerate(edges) if ed == d]
+			isempty(d_idx) && continue
+
+			col = depth_colors[mod1(d + 1, length(depth_colors))]
+			a = clamp(alpha - d * 0.04, 0.3, alpha)
+
+			lws_d = [edge_lw[k] for k in d_idx]
+			lw_lo_d, lw_hi_d = extrema(lws_d)
+			lw_range_d = max(lw_hi_d - lw_lo_d, 1e-12)
+
+			for b in 1:nbins
+				lo = lw_lo_d + (b - 1) * lw_range_d / nbins
+				hi = lw_lo_d + b * lw_range_d / nbins
+				bw = (lo + hi) / 2
+				pts = Point3f[]
+				for k in d_idx
+					w = edge_lw[k]
+					if (b == nbins ? w >= lo : lo <= w < hi)
+						p, c, _ = edges[k]
+						push!(pts, Point3f(seg.proximal_x[p], seg.proximal_y[p], seg.proximal_z[p]))
+						push!(pts, Point3f(seg.distal_x[c], seg.distal_y[c], seg.distal_z[c]))
+					end
+				end
+				isempty(pts) && continue
+				linesegments!(ax, pts; linewidth=bw, color=(col, a))
+			end
+		end
+		return length(edges)
+	end
+
+	"""Plot tree with a single base color, linewidth from radius."""
+	function plot_tree_single_color!(ax, tree; color=:red,
+			max_depth=typemax(Int), max_segments=typemax(Int),
+			lw_min=0.3, lw_max=5.0, alpha=0.9)
+		seg = tree.segments
+		topo = tree.topology
+		n = seg.n
+		n == 0 && return 0
+
+		# BFS depth
+		depth = fill(-1, n)
+		queue = Int[]
+		for i in 1:n
+			Int(topo.parent_id[i]) <= 0 && (depth[i] = 0; push!(queue, i))
+		end
+		local h = 1
+		while h <= length(queue)
+			i = queue[h]; h += 1
+			for cid_raw in (topo.child1_id[i], topo.child2_id[i], topo.child3_id[i])
+				cid = Int(cid_raw)
+				(cid <= 0 || cid > n) && continue
+				depth[cid] = depth[i] + 1
+				push!(queue, cid)
+			end
+		end
+
+		edges = Tuple{Int,Int}[]
+		for i in 1:n
+			(depth[i] < 0 || depth[i] >= max_depth) && continue
+			for cid_raw in (topo.child1_id[i], topo.child2_id[i], topo.child3_id[i])
+				cid = Int(cid_raw)
+				(cid <= 0 || cid > n) && continue
+				push!(edges, (i, cid))
+			end
+		end
+		isempty(edges) && return 0
+
+		if length(edges) > max_segments
+			idx = sort(Random.shuffle(collect(1:length(edges)))[1:max_segments])
+			edges = edges[idx]
+		end
+
+		radii = [Float64(seg.radius[c]) for (_, c) in edges]
+		r0, r1 = length(radii) >= 10 ?
+			(quantile(radii, 0.05), quantile(radii, 0.95)) : extrema(radii)
+		denom = max(r1 - r0, 1e-12)
+
+		nbins = 15
+		lws = [lw_min + clamp((r - r0) / denom, 0.0, 1.0) * (lw_max - lw_min) for r in radii]
+		lw_lo, lw_hi = extrema(lws)
+		lw_range = max(lw_hi - lw_lo, 1e-12)
+
+		for b in 1:nbins
+			lo = lw_lo + (b - 1) * lw_range / nbins
+			hi = lw_lo + b * lw_range / nbins
+			bw = (lo + hi) / 2
+			pts = Point3f[]
+			for (k, (p, c)) in enumerate(edges)
+				w = lws[k]
+				if (b == nbins ? w >= lo : lo <= w < hi)
+					push!(pts, Point3f(seg.proximal_x[p], seg.proximal_y[p], seg.proximal_z[p]))
+					push!(pts, Point3f(seg.distal_x[c], seg.distal_y[c], seg.distal_z[c]))
+				end
+			end
+			isempty(pts) && continue
+			a = clamp(0.4 + 0.5 * (bw - lw_lo) / lw_range, 0.3, alpha)
+			linesegments!(ax, pts; linewidth=bw, color=(color, a))
+		end
+		return length(edges)
+	end
+
 	# Helper: draw shell wireframe
-	function draw_shell_wireframe!(ax, dom; nθ=30, nφ=15)
+	function draw_shell_wireframe!(ax, dom; nθ=30, nφ=15, color=(:grey70, 0.5))
 		θr = range(0, 2π, length=nθ)
 		φr = range(0, π, length=nφ)
 		a, b, c = dom.semi_axes
 		ell_x = [a * sin(p) * cos(t) for t in θr, p in φr]
 		ell_y = [b * sin(p) * sin(t) for t in θr, p in φr]
 		ell_z = [c * cos(p) for t in θr, p in φr]
-		wireframe!(ax, ell_x, ell_y, ell_z; color=(:white, 0.06), linewidth=0.2)
+		wireframe!(ax, ell_x, ell_y, ell_z; color=color, linewidth=0.3)
 	end
-
-	md"*Plotting helpers defined*"
 end
 
-# ╔═╡ w0000010-0000-0000-0000-000000000010
+# ╔═╡ ccce5307-01aa-4f91-a343-1c4d6eaaedf9
 begin
 	# Grow LAD progressively: 10 → 50 → 150 → 500 terminals
 	cfg_lad = configs[1]  # LAD
@@ -208,15 +340,11 @@ begin
 		push!(stage_trees, tr)
 	end
 
-	fig_prog = Figure(size=(1600, 420), backgroundcolor=:grey10)
+	fig_prog = Figure(size=(600, 1200))
 
 	for (col, tr, nt) in zip(1:4, stage_trees, stages)
-		ax = Axis3(fig_prog[1, col],
+		ax = Axis3(fig_prog[col, 1],
 			title="$nt terminals ($(tr.segments.n) seg)",
-			backgroundcolor=:grey10,
-			titlecolor=:white,
-			xlabelcolor=:white, ylabelcolor=:white, zlabelcolor=:white,
-			xticklabelcolor=:grey70, yticklabelcolor=:grey70, zticklabelcolor=:grey70,
 			azimuth=1.3, elevation=0.3)
 		draw_shell_wireframe!(ax, domain)
 		plot_vessels_3d!(ax, tr.segments, tr.segments.n; color=:crimson)
@@ -225,16 +353,12 @@ begin
 	fig_prog
 end
 
-# ╔═╡ w0000011-0000-0000-0000-000000000011
+# ╔═╡ 8cd162a5-f0c2-4cbd-8452-34dfc9553904
 md"""
 ## Step 5: Terminal Diameter Monitoring
-
-Wenbo's request: *"stop growing when 90% terminal nodes have diameter < x"*
-
-VesselTree.jl tracks terminal status for every segment. We can inspect terminal diameters at any stage to verify physiological correctness.
 """
 
-# ╔═╡ w0000012-0000-0000-0000-000000000012
+# ╔═╡ fcb7cba1-34d8-48a6-81cf-0974349cea13
 begin
 	function terminal_diameter_stats(tree)
 		seg = tree.segments
@@ -253,7 +377,6 @@ begin
 		count(d -> d < threshold_um, diams) / length(diams) * 100
 	end
 
-	# Check CCO terminal diameters at each progressive stage
 	rows = String[]
 	for (nt, tr) in zip(stages, stage_trees)
 		diams = terminal_diameter_stats(tr)
@@ -261,104 +384,118 @@ begin
 		min_d = round(minimum(diams), digits=1)
 		max_d = round(maximum(diams), digits=1)
 		mean_d = round(mean(diams), digits=1)
-		p90 = round(pct_below(diams, 500.0), digits=1)  # % below 500μm
+		p90 = round(pct_below(diams, 500.0), digits=1)
 		push!(rows, "| $nt | $n_term | $min_d | $mean_d | $max_d | $(p90)% |")
 	end
-
-	Markdown.parse("""
-	**Terminal diameter monitoring (CCO skeleton only, before subdivision):**
-
-	| Target | Terminals | Min D (μm) | Mean D (μm) | Max D (μm) | % < 500μm |
-	|:-------|:----------|:-----------|:------------|:-----------|:-----------|
-	$(join(rows, "\n"))
-
-	> After subdivision, terminals reach **~8μm** (capillary diameter). The CCO skeleton terminals are larger because subdivision hasn't happened yet.
-	""")
 end
 
-# ╔═╡ w0000013-0000-0000-0000-000000000013
+# ╔═╡ 5200ec9a-bde4-4e31-b969-46081b35c3f3
+Markdown.parse("""
+**Terminal diameter monitoring (CCO):**
+
+| Target | Terminals | Min D (μm) | Mean D (μm) | Max D (μm) | % < 500μm |
+|:-------|:----------|:-----------|:------------|:-----------|:-----------|
+$(join(rows, "\n"))
+""")
+
+# ╔═╡ 4718d9a5-2dc9-408d-9afb-4f039765cace
 md"""
-## Step 6: Full Pipeline — All 3 Arteries
+## Step 6: Full CCO Growth — All 3 Arteries
 
-Now run the complete pipeline:
-1. **Phase 1: CCO** — simultaneous round-robin growth of LAD, LCX, RCA with territory partitioning
-2. **Phase 2: Kassab subdivision** — subdivide each terminal down to capillaries using the connectivity matrix
-3. **Phase 3: Barabasi geometry** — optimize junction angles (sprouting vs branching)
-4. **Phase 3b: Domain projection** — ensure all segments stay within the shell
-
-> **Compare to Wenbo:** his `forest.add(400)` does Phase 1 only with ~800 segments. Our pipeline produces ~30K+ segments down to 8μm capillaries.
+Simultaneous round-robin CCO growth with inter-tree collision avoidance and territory partitioning. No subdivision — pure CCO matching Wenbo's svVascularize approach.
 """
 
-# ╔═╡ w0000014-0000-0000-0000-000000000014
+# ╔═╡ a0109729-5424-438c-8adb-8def433a9cb6
 begin
-	t_gen = @elapsed forest = generate_kassab_coronary(
+	# CCO-only growth WITH inter-tree collision avoidance
+	# handoff_order=0 skips subdivision entirely
+	forest = generate_kassab_coronary(
 		domain, params_rca;
 		rng=MersenneTwister(42),
 		verbose=false,
+		handoff_order=0,
 	)
-	total_segs = sum(t.segments.n for (_, t) in forest.trees)
+	cco_trees = Dict(name => tree for (name, tree) in forest.trees)
 
-	md"""
-	**Full pipeline result:** $(total_segs) total segments in $(round(t_gen, digits=1))s
-
-	| Artery | Segments |
-	|:-------|:---------|
-	| LAD | $(forest.trees["LAD"].segments.n) |
-	| LCX | $(forest.trees["LCX"].segments.n) |
-	| RCA | $(forest.trees["RCA"].segments.n) |
-	"""
+	cco_total = sum(t.segments.n for (_, t) in cco_trees)
 end
 
-# ╔═╡ w0000015-0000-0000-0000-000000000015
+# ╔═╡ adc5e9ae-fa33-48f1-98a1-396502a6d4c1
 md"""
-### 3D Visualization — Anterior and Posterior Views
+**CCO result:** $(cco_total) total segments (with inter-tree collision avoidance)
+
+| Artery | Segments | Terminals |
+|:-------|:---------|:----------|
+| LAD | $(cco_trees["LAD"].segments.n) | $(cco_trees["LAD"].n_terminals) |
+| LCX | $(cco_trees["LCX"].segments.n) | $(cco_trees["LCX"].n_terminals) |
+| RCA | $(cco_trees["RCA"].segments.n) | $(cco_trees["RCA"].n_terminals) |
 """
 
-# ╔═╡ w0000016-0000-0000-0000-000000000016
+# ╔═╡ 28f107f7-1f6f-4329-9f5b-a125f19675f3
+md"""
+### Per-Artery Views (depth-colored)
+"""
+
+# ╔═╡ 941e4826-8025-450b-bd3c-ea7367f423fe
 begin
 	artery_colors = Dict("LAD" => :crimson, "LCX" => :dodgerblue, "RCA" => :limegreen)
+	draw_max_segments = 50000
 
-	fig_3d = Figure(size=(1400, 600), backgroundcolor=:grey10)
+	fig_per = Figure(size=(1000, 2400))
 
-	for (col, az, title) in [(1, 1.3, "Anterior"), (2, 4.5, "Posterior")]
-		ax = Axis3(fig_3d[1, col],
-			title="$title View",
-			xlabel="x (mm)", ylabel="y (mm)", zlabel="z (mm)",
-			backgroundcolor=:grey10,
-			titlecolor=:white,
-			xlabelcolor=:white, ylabelcolor=:white, zlabelcolor=:white,
-			xticklabelcolor=:grey70, yticklabelcolor=:grey70, zticklabelcolor=:grey70,
-			azimuth=az, elevation=0.3)
-		draw_shell_wireframe!(ax, domain)
+	for (row, name) in enumerate(["LAD", "LCX", "RCA"])
+		tree = cco_trees[name]
+		n = tree.segments.n
 
-		for name in ["RCA", "LCX", "LAD"]
-			tree = forest.trees[name]
-			plot_vessels_3d!(ax, tree.segments, tree.segments.n;
-				color=artery_colors[name], min_diam_um=20.0)
-		end
+		ax = Axis3(fig_per[row, 1],
+			title="$name — CCO ($n seg)",
+			xlabel="X", ylabel="Y", zlabel="Z",
+			titlesize=14,
+			azimuth=1.3, elevation=0.3)
+		plot_tree_3d_depth!(ax, tree;
+			max_depth=typemax(Int),
+			max_segments=draw_max_segments,
+			lw_min=0.3, lw_max=5.0, alpha=0.9)
 	end
 
-	Label(fig_3d[2, :],
-		"LAD (red): $(forest.trees["LAD"].segments.n)  |  LCX (blue): $(forest.trees["LCX"].segments.n)  |  RCA (green): $(forest.trees["RCA"].segments.n)  |  Total: $total_segs segments",
-		color=:grey70, fontsize=12)
+	fig_per
+end
+
+# ╔═╡ d2000001-0000-0000-0000-000000000001
+begin
+	# Combined 3-artery view — per-artery color to distinguish trees
+	fig_3d = Figure(size=(1000, 800))
+
+	ax_combined = Axis3(fig_3d[1, 1],
+		title="All Arteries — CCO",
+		xlabel="X", ylabel="Y", zlabel="Z",
+		titlesize=14,
+		azimuth=1.3, elevation=0.3)
+
+	for name in ["RCA", "LCX", "LAD"]
+		tree = cco_trees[name]
+		plot_tree_single_color!(ax_combined, tree;
+			color=artery_colors[name],
+			# max_depth=typemax(Int),
+			max_depth=20,
+			max_segments=draw_max_segments, lw_min=0.3, lw_max=5.0, alpha=0.9)
+	end
 
 	fig_3d
 end
 
-# ╔═╡ w0000017-0000-0000-0000-000000000017
+# ╔═╡ 69e142f1-228e-409d-a096-09b391d3a026
 md"""
-## Step 7: Terminal Diameter Check (Post-Subdivision)
-
-Now we can implement Wenbo's stopping criterion check. After the full pipeline, what fraction of terminal nodes have diameter below various thresholds?
+## Step 7: Terminal Diameter Check
 """
 
-# ╔═╡ w0000018-0000-0000-0000-000000000018
+# ╔═╡ 091f9ae7-29f9-4514-b449-91fdc8c31e7e
 begin
-	thresholds_um = [8.0, 10.0, 20.0, 50.0, 100.0, 500.0]
+	thresholds_um = [50.0, 100.0, 200.0, 500.0, 1000.0]
 
 	all_rows = String[]
 	for name in ["LAD", "LCX", "RCA"]
-		tree = forest.trees[name]
+		tree = cco_trees[name]
 		diams = terminal_diameter_stats(tree)
 		n_term = length(diams)
 		min_d = round(minimum(diams), digits=1)
@@ -367,30 +504,27 @@ begin
 		pcts = [string(round(pct_below(diams, th), digits=1), "%") for th in thresholds_um]
 		push!(all_rows, "| $name | $n_term | $min_d | $max_d | $(join(pcts, " | ")) |")
 	end
-
-	Markdown.parse("""
-	**Terminal diameter analysis after full pipeline:**
-
-	| Artery | Terminals | Min D (μm) | Max D (μm) | <8μm | <10μm | <20μm | <50μm | <100μm | <500μm |
-	|:-------|:----------|:-----------|:-----------|:-----|:------|:------|:------|:-------|:-------|
-	$(join(all_rows, "\n"))
-
-	> Wenbo's criterion: *"stop when 90% of terminals have diameter < x"*. After Kassab subdivision, most terminals are at capillary scale (~8μm). This is achieved automatically by the connectivity matrix, not by a stopping threshold.
-	""")
 end
 
-# ╔═╡ w0000019-0000-0000-0000-000000000019
+# ╔═╡ 4630961f-8aed-4dbb-b3bc-0c97984d56b1
+Markdown.parse("""
+**Terminal diameter analysis (CCO):**
+
+| Artery | Terminals | Min D (μm) | Max D (μm) | <50μm | <100μm | <200μm | <500μm | <1000μm |
+|:-------|:----------|:-----------|:-----------|:------|:-------|:-------|:-------|:--------|
+$(join(all_rows, "\n"))
+""")
+
+# ╔═╡ fbb64594-1b4e-4131-bcfb-de324dcc6b65
 md"""
 ## Step 8: Domain Constraint Verification
-
-Are all segments within the shell domain? This verifies the domain constraint — something Wenbo's solid-volume approach doesn't properly enforce.
 """
 
-# ╔═╡ w0000020-0000-0000-0000-000000000020
+# ╔═╡ f78616ac-404f-4f80-a495-20fad2b4ea38
 begin
 	domain_rows = String[]
 	for name in ["LAD", "LCX", "RCA"]
-		tree = forest.trees[name]
+		tree = cco_trees[name]
 		seg = tree.segments
 		n = seg.n
 		n_prox_out = 0
@@ -404,29 +538,28 @@ begin
 		pct_in = round((1 - (n_prox_out + n_dist_out) / (2 * n)) * 100, digits=2)
 		push!(domain_rows, "| $name | $n | $n_prox_out | $n_dist_out | $(pct_in)% |")
 	end
-
-	Markdown.parse("""
-	**Domain constraint check:**
-
-	| Artery | Segments | Proximal Outside | Distal Outside | % Inside |
-	|:-------|:---------|:-----------------|:---------------|:---------|
-	$(join(domain_rows, "\n"))
-	""")
 end
 
-# ╔═╡ w0000021-0000-0000-0000-000000000021
-md"""
-## Step 9: Validation Report Card (Kassab 1993)
+# ╔═╡ a35d2510-dbf9-414f-a36d-e8ea9ac20944
+Markdown.parse("""
+**Domain constraint check:**
 
-VesselTree.jl validates the generated tree against Kassab's morphometric measurements. This is the critical scientific validation that svVascularize lacks.
+| Artery | Segments | Proximal Outside | Distal Outside | % Inside |
+|:-------|:---------|:-----------------|:---------------|:---------|
+$(join(domain_rows, "\n"))
+""")
+
+# ╔═╡ b8b78b5b-48f4-4507-8a02-d777081cc7de
+md"""
+## Step 9: Diameter Distribution
 """
 
-# ╔═╡ w0000022-0000-0000-0000-000000000022
+# ╔═╡ cb61549f-7fe2-47d5-91fa-ca6b5d7272bd
 begin
 	fig_hist = Figure(size=(1200, 400))
 
 	for (idx, name) in enumerate(["LAD", "LCX", "RCA"])
-		tree = forest.trees[name]
+		tree = cco_trees[name]
 		seg = tree.segments
 		n = seg.n
 		all_diameters = [seg.radius[i] * 2000 for i in 1:n if seg.radius[i] > 0]
@@ -445,75 +578,90 @@ begin
 	fig_hist
 end
 
-# ╔═╡ w0000023-0000-0000-0000-000000000023
-begin
-	# Per-artery report card
-	report_output = String[]
-	for name in ["LAD", "LCX", "RCA"]
-		tree = forest.trees[name]
-		tp = name == "LAD" ? params_lad : name == "LCX" ? params_lcx : params_rca
-		card = generate_report_card(tree, tp)
-		buf = IOBuffer()
-		print_report_card(buf, card)
-		push!(report_output, "### $name Report Card\n```\n$(String(take!(buf)))```\n")
-	end
+# ╔═╡ d3000001-0000-0000-0000-000000000001
+md"""
+## Step 10: Export for Wenbo's Flow Simulation
 
-	Markdown.parse(join(report_output, "\n"))
+Export each tree as a text file matching Wenbo's format (11 columns):
+
+```
+node_id  parent_id  direction  diameter(μm)  length(μm)  0  0  0  x  y  z
+```
+
+This is directly compatible with Wenbo's `flow_simulation_2025_Nov.ipynb` loader.
+"""
+
+# ╔═╡ d3000002-0000-0000-0000-000000000001
+begin
+	export_dir = joinpath(dirname(@__DIR__), "output")
+	export_paths = export_forest_wenbo_txt(forest, export_dir)
 end
 
-# ╔═╡ w0000024-0000-0000-0000-000000000024
+# ╔═╡ 188533a9-2b9b-4e53-89c8-ba8f82ce236e
+export_dir
+
+# ╔═╡ d3000003-0000-0000-0000-000000000001
+begin
+	# Preview first 10 lines of LAD export
+	lad_path = joinpath(export_dir, "LAD.txt")
+	preview_lines = readlines(lad_path)
+	preview = join(preview_lines[1:min(10, length(preview_lines))], "\n")
+
+	md"""
+	**Preview (LAD, first 10 lines):**
+	```
+	$(preview)
+	```
+
+	**Column format:** `node_id  parent_id  dir  diameter(μm)  length(μm)  0  0  0  x(mm)  y(mm)  z(mm)`
+	"""
+end
+
+# ╔═╡ 5f955173-ad5c-48ef-b4aa-dfbbf371713c
 md"""
-## Summary: VesselTree.jl vs svVascularize
+## Summary
 
-| Aspect | svVascularize | VesselTree.jl |
-|:-------|:-------------|:--------------|
-| Domain shape | Solid Delaunay3D volume | Ellipsoid shell (myocardial wall) |
-| Anatomy | Vessels fill heart chambers (wrong) | Vessels wrap around epicardium (correct) |
-| Growth | CCO only (~800 segments) | CCO + subdivision (~30K+ segments) |
-| Diameter range | ~mm scale only | 8μm capillaries to 3mm stems |
-| Murray's law | Unverified | γ = 7/3, validated |
-| Junction geometry | None | Barabasi sprouting/branching |
-| Per-artery params | None | LAD/LCX/RCA each have Kassab CM |
-| Validation | None | 9-metric report card |
-| Competitive growth | `forest.add(1)` loop | Round-robin with territory maps |
-| Terminal monitoring | Requested but not implemented | Built-in `is_terminal` tracking |
-| Speed | ~9s for 400 iterations (Python) | ~seconds for full pipeline (Julia) |
-
-### Key takeaway for Wenbo
-The stopping criterion *"90% of terminals < x"* is automatically satisfied by the Kassab connectivity matrix — it defines exactly how many daughters of each order to generate, naturally terminating at capillary scale. The CCO phase handles spatial layout; the subdivision phase handles morphometric accuracy. Separating these concerns gives both anatomically correct geometry and physiologically validated statistics.
-
-### Next steps
-1. **Mesh domain support** — extend VesselTree.jl to accept arbitrary surface meshes (patient-specific anatomy from CT)
-2. **Custom seed import** — allow seed coordinates from external segmentation
-3. **Flow simulation** — connect to 1D hemodynamics (VesselTree.jl can export centerlines)
+Pure CCO growth with Murray's law radii (γ = 7/3) and inter-tree collision avoidance. Domain is an ellipsoid shell modeling the myocardial wall. Text files exported in Wenbo's format for flow simulation.
 """
 
 # ╔═╡ Cell order:
-# ╟─w0000001-0000-0000-0000-000000000001
-# ╠═a1000001-b000-4c00-8d00-e00000000002
-# ╠═f4c0b7fb-637d-4bd7-adff-4a06fe91c081
-# ╠═4378fe0a-1dd5-4b66-b6ae-b0668e12b944
-# ╠═fb9ffd67-0ab9-4974-ba52-d64742a58a08
-# ╟─w0000002-0000-0000-0000-000000000002
-# ╠═w0000003-0000-0000-0000-000000000003
-# ╟─w0000004-0000-0000-0000-000000000004
-# ╠═w0000005-0000-0000-0000-000000000005
-# ╟─w0000006-0000-0000-0000-000000000006
-# ╠═w0000007-0000-0000-0000-000000000007
-# ╟─w0000008-0000-0000-0000-000000000008
-# ╠═w0000009-0000-0000-0000-000000000009
-# ╠═w0000010-0000-0000-0000-000000000010
-# ╟─w0000011-0000-0000-0000-000000000011
-# ╠═w0000012-0000-0000-0000-000000000012
-# ╟─w0000013-0000-0000-0000-000000000013
-# ╠═w0000014-0000-0000-0000-000000000014
-# ╟─w0000015-0000-0000-0000-000000000015
-# ╠═w0000016-0000-0000-0000-000000000016
-# ╟─w0000017-0000-0000-0000-000000000017
-# ╠═w0000018-0000-0000-0000-000000000018
-# ╟─w0000019-0000-0000-0000-000000000019
-# ╠═w0000020-0000-0000-0000-000000000020
-# ╟─w0000021-0000-0000-0000-000000000021
-# ╠═w0000022-0000-0000-0000-000000000022
-# ╠═w0000023-0000-0000-0000-000000000023
-# ╟─w0000024-0000-0000-0000-000000000024
+# ╠═d64a065b-258a-47df-86e4-eba5c8966829
+# ╠═38d9074f-a4ad-4ae0-9c22-4a57a9ecfaf3
+# ╠═6f7c71c6-a2c4-4e69-af63-3cc382df760d
+# ╠═86de57c5-bb12-425f-a2d3-218f805f6761
+# ╠═e5c54f95-2461-46e7-9870-d411df930300
+# ╟─e4965a7a-0800-49fb-93b9-be63caf2111f
+# ╟─87657f8c-3c2b-4f06-b89d-b77de7bdae8b
+# ╠═bd7d2e5c-f5ea-4dad-a131-0b61d4b99de6
+# ╟─7f5bdb8c-d128-4324-9b57-db15adac6de3
+# ╟─28d33479-2192-4cc2-8e2f-d1dd2772fb69
+# ╠═b26965de-6069-4c3d-a9c9-8be15d74bf10
+# ╟─52055f05-592d-473a-88a8-eb4a5034065d
+# ╟─6df19e82-fa9f-4e26-bc54-7199d330abb8
+# ╠═33573674-ea88-406b-b3c6-9013b976ee37
+# ╟─0a987a32-e3d5-44c5-b6a9-d2cf0b29bde1
+# ╟─acb6d732-8524-4e60-85d3-a5bc4fa56d86
+# ╟─7fcc9a94-7cf4-4fdb-9e22-6e3bacd643a2
+# ╟─ccce5307-01aa-4f91-a343-1c4d6eaaedf9
+# ╟─8cd162a5-f0c2-4cbd-8452-34dfc9553904
+# ╠═fcb7cba1-34d8-48a6-81cf-0974349cea13
+# ╟─5200ec9a-bde4-4e31-b969-46081b35c3f3
+# ╟─4718d9a5-2dc9-408d-9afb-4f039765cace
+# ╠═a0109729-5424-438c-8adb-8def433a9cb6
+# ╟─adc5e9ae-fa33-48f1-98a1-396502a6d4c1
+# ╟─28f107f7-1f6f-4329-9f5b-a125f19675f3
+# ╟─941e4826-8025-450b-bd3c-ea7367f423fe
+# ╟─d2000001-0000-0000-0000-000000000001
+# ╟─69e142f1-228e-409d-a096-09b391d3a026
+# ╠═091f9ae7-29f9-4514-b449-91fdc8c31e7e
+# ╟─4630961f-8aed-4dbb-b3bc-0c97984d56b1
+# ╟─fbb64594-1b4e-4131-bcfb-de324dcc6b65
+# ╠═f78616ac-404f-4f80-a495-20fad2b4ea38
+# ╟─a35d2510-dbf9-414f-a36d-e8ea9ac20944
+# ╟─b8b78b5b-48f4-4507-8a02-d777081cc7de
+# ╟─cb61549f-7fe2-47d5-91fa-ca6b5d7272bd
+# ╟─d3000001-0000-0000-0000-000000000001
+# ╠═d3000002-0000-0000-0000-000000000001
+# ╠═188533a9-2b9b-4e53-89c8-ba8f82ce236e
+# ╟─d3000003-0000-0000-0000-000000000001
+# ╟─5f955173-ad5c-48ef-b4aa-dfbbf371713c

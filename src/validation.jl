@@ -588,18 +588,21 @@ function validate_asymmetry_ks(tree::VascularTree, params::MorphometricParams; r
     topo = tree.topology
     ratios = Float64[]
     for e in elements
-        last_seg = e.segment_ids[end]
-        child_elems = Set{Int}()
-        for cfield in (topo.child1_id[last_seg], topo.child2_id[last_seg])
-            cid = Int(cfield)
-            cid > 0 && haskey(seg_to_elem, cid) && push!(child_elems, seg_to_elem[cid])
+        parent_diam = e.mean_diameter_um
+        parent_diam <= 0.0 && continue
+
+        # Scan ALL segments in this element for daughter elements
+        for sid in e.segment_ids
+            for cfield in (topo.child1_id[sid], topo.child2_id[sid], topo.child3_id[sid])
+                cid = Int(cfield)
+                cid <= 0 && continue
+                child_eid = get(seg_to_elem, cid, 0)
+                child_eid <= 0 && continue
+                child_eid == e.id && continue  # same element (continuation)
+                child_elem = elem_by_id[child_eid]
+                push!(ratios, child_elem.mean_diameter_um / parent_diam)
+            end
         end
-        filter!(ce -> ce != e.id, child_elems)
-        length(child_elems) < 2 && continue
-        # Asymmetry = smaller/larger daughter diameter
-        child_diams = Float64[elem_by_id[ce].mean_diameter_um for ce in child_elems]
-        sort!(child_diams)
-        push!(ratios, child_diams[1] / child_diams[end])
     end
 
     isempty(ratios) && return (n=0, D=0.0, p=1.0, median=0.0)
@@ -669,6 +672,25 @@ function generate_report_card(tree::VascularTree, params::MorphometricParams; re
     passed = 0
     total = 0
 
+    # 7. S/E ratios vs Kassab Table 5 — computed BEFORE diameter reordering
+    # Subdivision assigns orders from the CM, preserving element chain structure.
+    # Diameter-based reordering can break element chains at low orders where
+    # Murray propagation shifts continuation radii across order boundaries.
+    se_results = validate_se_ratios(tree, params; reorder=false)
+    se_pass = 0
+    se_total = length(se_results)
+    for (_, r) in se_results
+        r.ratio_error < 0.30 && (se_pass += 1)
+    end
+    card[:se_ratios] = se_results
+    card[:se_ratios_pass] = se_pass
+    card[:se_ratios_total] = se_total
+    if se_total > 0
+        total += 1
+        se_pass >= max(1, ceil(Int, se_total * 0.5)) && (passed += 1)
+    end
+
+    # Now reorder for diameter-based metrics
     reorder && assign_strahler_orders!(tree, params)
 
     # 1. Per-order diameter mean proximity (element-level)
@@ -742,20 +764,7 @@ function generate_report_card(tree::VascularTree, params::MorphometricParams; re
     total += 1
     tri_pct < 10.0 && (passed += 1)
 
-    # 7. S/E ratios vs Kassab Table 5
-    se_results = validate_se_ratios(tree, params; reorder=false)
-    se_pass = 0
-    se_total = length(se_results)
-    for (_, r) in se_results
-        r.ratio_error < 0.30 && (se_pass += 1)
-    end
-    card[:se_ratios] = se_results
-    card[:se_ratios_pass] = se_pass
-    card[:se_ratios_total] = se_total
-    if se_total > 0
-        total += 1
-        se_pass >= max(1, ceil(Int, se_total * 0.5)) && (passed += 1)
-    end
+    # 7. S/E ratios — already computed above (before reordering)
 
     # 8. Element count proportions vs Kassab Table 9
     # Compare proportional distribution (scale-independent) rather than absolute counts
