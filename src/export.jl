@@ -327,13 +327,13 @@ end
 Export tree in Wenbo's text format for flow simulation. Each line has 11
 whitespace-separated columns:
 
-    node_id  parent_id  direction  diameter(μm)  length(μm)  0  0  0  x  y  z
+    node_id  parent_id  direction  diameter(μm)  length(cm)  0  0  0  x(cm)  y(cm)  z(cm)
 
 - IDs are 0-indexed (node 0 = root with parent -1)
 - Direction: "r" (right/first child) or "l" (left/second child); root = "r"
-- Coordinates are the distal endpoint position in the same units as the tree
-  (mm by default in VesselTree.jl)
-- Diameter and length are converted from mm to μm (×2000 and ×1000)
+- Diameter in microns (radius_mm × 2000)
+- Length in centimeters (mm × 0.1) — Wenbo's physics does `L_m = len * 0.01`
+- Coordinates in centimeters (mm × 0.1)
 """
 function export_wenbo_txt(tree::VascularTree, filename::AbstractString)
     n = tree.segments.n
@@ -359,17 +359,17 @@ function export_wenbo_txt(tree::VascularTree, filename::AbstractString)
             node_id = i - 1  # 0-indexed
             parent_id = Int(topo.parent_id[i]) <= 0 ? -1 : Int(topo.parent_id[i]) - 1
             diam_um = seg.radius[i] * 2000.0      # radius (mm) → diameter (μm)
-            len_um = seg.seg_length[i] * 1000.0    # mm → μm
+            len_cm = seg.seg_length[i] * 0.1       # mm → cm
             dir = direction[i]
-            # Distal endpoint as node position
-            x = seg.distal_x[i]
-            y = seg.distal_y[i]
-            z = seg.distal_z[i]
+            # Distal endpoint as node position (mm → cm)
+            x = seg.distal_x[i] * 0.1
+            y = seg.distal_y[i] * 0.1
+            z = seg.distal_z[i] * 0.1
 
             println(io,
                 lpad(node_id, 6), "  ", lpad(parent_id, 6), "  ", dir, "  ",
                 lpad(string(round(diam_um, digits=6)), 12), "  ",
-                lpad(string(round(len_um, digits=6)), 12), "  ",
+                lpad(string(round(len_cm, digits=6)), 12), "  ",
                 "    0  ", "    0  ", "    0  ",
                 lpad(string(round(x, digits=6)), 12), "  ",
                 lpad(string(round(y, digits=6)), 12), "  ",
