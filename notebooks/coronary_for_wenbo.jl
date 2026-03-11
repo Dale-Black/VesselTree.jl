@@ -89,14 +89,19 @@ params_rca = kassab_rca_params();
 begin
 	handoff_order = 5
 	target_terminals = Dict(
-		"LAD" => 7200,
-		"LCX" => 3600,
-		"RCA" => 7800,
+		"LAD" => 2250,
+		"LCX" => 1050,
+		"RCA" => 2500,
 	)
 	territory_fractions = Dict(
 		"LAD" => 0.40,
 		"LCX" => 0.25,
 		"RCA" => 0.35,
+	)
+	root_radii_mm = Dict(
+		"LAD" => 1.75,
+		"LCX" => 2.25,
+		"RCA" => 2.25,
 	)
 
 	base_configs = VesselTree.coronary_tree_configs(domain)
@@ -104,7 +109,7 @@ begin
 		VesselTree.TreeConfig(
 			cfg.name,
 			cfg.root_position,
-			cfg.root_radius,
+			get(root_radii_mm, cfg.name, cfg.root_radius),
 			cfg.root_direction,
 			get(target_terminals, cfg.name, cfg.target_terminals),
 			get(territory_fractions, cfg.name, cfg.territory_fraction),
@@ -139,6 +144,7 @@ Paper-consistent default for flow comparison:
 - `handoff_order = 0` leaves only the CCO skeleton, which gives far too few parallel terminal pathways to compare against the 2007/2008 porcine reconstructions.
 - `target_terminals = $(target_terminals)` sets the CCO skeleton resolution before statistical subdivision.
 - `territory_fractions = $(territory_fractions)` sets the intended myocardial territory split.
+- `root_radii_mm = $(root_radii_mm)` applies the paper-derived order-11 root-radius scale.
 
 Edit only this one parameter block when calibrating toward the paper:
 - `handoff_order`
@@ -148,6 +154,9 @@ Edit only this one parameter block when calibrating toward the paper:
 - `territory_fractions["LAD"]`
 - `territory_fractions["LCX"]`
 - `territory_fractions["RCA"]`
+- `root_radii_mm["LAD"]`
+- `root_radii_mm["LCX"]`
+- `root_radii_mm["RCA"]`
 """
 
 # ╔═╡ acb6d732-8524-4e60-85d3-a5bc4fa56d86
@@ -756,19 +765,17 @@ For comparison with the 2008 Molloi/Wong normal-tree model, the outlet
 pressure is set to pre-capillary pressure `Pc = Pv + 10 mmHg = 15 mmHg`
 when venous pressure is `Pv = 5 mmHg`.
 
-Paper-mode option:
-- the 2008 paper reports a `1.6×` dilation for arterioles `< 400 μm`
-- in this notebook, that is implemented conservatively as an optional
-  arteriole-only ramp: `80 μm → 1.0×`, smoothly increasing to
-  `400 μm → 1.6×`
-- this is an implementation inference for a capillary-resolved synthetic tree;
-  it changes only the hemodynamic evaluation, not the generated tree geometry
+Vasodilation option:
+- the flow solver exposes a generic `vasodilation(...)` function
+- default hyperemic parameters matching the 2008 paper are:
+  `factor = 1.6`, `min_diameter = 0 μm`, `max_diameter = 400 μm`
+- this changes only the hemodynamic evaluation, not the generated tree geometry
   or Murray-law radii stored in the tree/export
 
 **Changes from Python original:**
 - Preserves Wenbo's `length(cm) → meters` conversion via `length × 0.01`
 - Uses pre-capillary outlet pressure `Pc = 15 mmHg` for arterial-tree flow
-- Supports optional conservative 2008 paper-mode arteriole dilation
+- Supports optional vasodilation via a configurable diameter-band scaling function
 - Added pruning of oversized leaf nodes (leaked large vessels that were never subdivided)
 - Handles single-child nodes (series connection) after pruning
 
@@ -779,7 +786,7 @@ Paper-mode option:
 | `TOLERANCE` | 0.001 | `FLOW_TOLERANCE` |
 | `micron2m` | 1e-6 | `FLOW_micron2m` |
 | `m3pers2mLpermin` | 6e7 | `FLOW_m3s_to_mLmin` |
-| `paper-mode` | `80–400 μm arteriole ramp to 1.6×` | `FLOW_PAPER_2008_MODE` |
+| `vasodilation` | `factor=1.6, min=0 μm, max=400 μm` | `FLOW_ENABLE_VASODILATION` |
 """
 
 # ╔═╡ f1000002-0000-0000-0000-000000000001
@@ -816,10 +823,10 @@ begin
 	FLOW_TOLERANCE    = 0.001
 	FLOW_Pin          = 100 * FLOW_mmHg2Pa   # 100 mmHg inlet
 	FLOW_Pout         = 15 * FLOW_mmHg2Pa    # pre-capillary outlet (Pv=5 mmHg, Pc=15 mmHg)
-	FLOW_PAPER_2008_MODE = true
-	FLOW_PAPER_ARTERIOLE_MIN_UM = 80.0
-	FLOW_PAPER_DILATION_THRESHOLD_UM = 400.0
-	FLOW_PAPER_DILATION_FACTOR = 1.6
+	FLOW_ENABLE_VASODILATION = false
+	FLOW_VASODILATION_MIN_DIAMETER_UM = 0.0
+	FLOW_VASODILATION_MAX_DIAMETER_UM = 400.0
+	FLOW_VASODILATION_FACTOR = 1.6
 end
 
 # ╔═╡ f1000003-0000-0000-0000-000000000001
@@ -848,13 +855,26 @@ begin
 		return viscosity_rel * mu_plasma * 0.1   # Poise → Pa·s
 	end
 
-	function flow_effective_diameter_um(diameter_um::Float64)
-		if FLOW_PAPER_2008_MODE &&
-		   FLOW_PAPER_ARTERIOLE_MIN_UM <= diameter_um <= FLOW_PAPER_DILATION_THRESHOLD_UM
-			t = (diameter_um - FLOW_PAPER_ARTERIOLE_MIN_UM) /
-				(FLOW_PAPER_DILATION_THRESHOLD_UM - FLOW_PAPER_ARTERIOLE_MIN_UM)
-			factor = 1.0 + clamp(t, 0.0, 1.0) * (FLOW_PAPER_DILATION_FACTOR - 1.0)
+	function vasodilation(
+		diameter_um::Float64;
+		factor::Float64=FLOW_VASODILATION_FACTOR,
+		min_diameter_um::Float64=FLOW_VASODILATION_MIN_DIAMETER_UM,
+		max_diameter_um::Float64=FLOW_VASODILATION_MAX_DIAMETER_UM,
+	)
+		if min_diameter_um <= diameter_um <= max_diameter_um
 			return diameter_um * factor
+		end
+		return diameter_um
+	end
+
+	function flow_effective_diameter_um(diameter_um::Float64)
+		if FLOW_ENABLE_VASODILATION
+			return vasodilation(
+				diameter_um;
+				factor=FLOW_VASODILATION_FACTOR,
+				min_diameter_um=FLOW_VASODILATION_MIN_DIAMETER_UM,
+				max_diameter_um=FLOW_VASODILATION_MAX_DIAMETER_UM,
+			)
 		end
 		return diameter_um
 	end
@@ -1166,7 +1186,7 @@ end
 
 # ╔═╡ 6277c28f-6ebe-4209-81d6-19e75cadc3e2
 Markdown.parse("""
-**Flow Simulation Results (Pries viscosity, 100 mmHg inlet, 15 mmHg pre-capillary outlet, paper-mode = $(FLOW_PAPER_2008_MODE)):**
+**Flow Simulation Results (Pries viscosity, 100 mmHg inlet, 15 mmHg pre-capillary outlet, vasodilation enabled = $(FLOW_ENABLE_VASODILATION)):**
 
 | Artery | Flow (mL/min) | Leaf Nodes | Min D (μm) | Max D (μm) | Avg D (μm) |
 |:-------|:--------------|:-----------|:-----------|:-----------|:-----------|
@@ -1174,9 +1194,9 @@ $(join(flow_summary_rows, "\n"))
 
 *Oversized leaf nodes (>50 μm diameter) pruned before simulation.*
 
-$(FLOW_PAPER_2008_MODE ?
-"*2008 paper-mode enabled: segments in the $(Int(FLOW_PAPER_ARTERIOLE_MIN_UM))–$(Int(FLOW_PAPER_DILATION_THRESHOLD_UM)) μm arteriole band are smoothly dilated up to $(FLOW_PAPER_DILATION_FACTOR)× during resistance calculation.*" :
-"*2008 paper-mode disabled: flow uses the exported diameters directly.*")
+$(FLOW_ENABLE_VASODILATION ?
+"*Vasodilation enabled: segments with diameters in [$(Int(FLOW_VASODILATION_MIN_DIAMETER_UM)), $(Int(FLOW_VASODILATION_MAX_DIAMETER_UM))] μm use a $(FLOW_VASODILATION_FACTOR)× dilated diameter during resistance calculation.*" :
+"*Vasodilation disabled: flow uses the exported diameters directly.*")
 """)
 
 # ╔═╡ Cell order:
