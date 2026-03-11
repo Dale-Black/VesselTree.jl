@@ -31,22 +31,7 @@ end
 Build a spatial grid from the first `n` segments, bucketing by midpoint.
 """
 function build_grid(segments::SegmentData, n::Int, domain::AbstractDomain, cell_size::Float64)
-    # Compute bounding box from domain
-    if domain isa SphereDomain
-        lo = (domain.center[1] - domain.radius, domain.center[2] - domain.radius, domain.center[3] - domain.radius)
-        hi = (domain.center[1] + domain.radius, domain.center[2] + domain.radius, domain.center[3] + domain.radius)
-    elseif domain isa BoxDomain
-        lo = domain.min_corner
-        hi = domain.max_corner
-    elseif domain isa EllipsoidDomain
-        lo = (domain.center[1] - domain.semi_axes[1], domain.center[2] - domain.semi_axes[2], domain.center[3] - domain.semi_axes[3])
-        hi = (domain.center[1] + domain.semi_axes[1], domain.center[2] + domain.semi_axes[2], domain.center[3] + domain.semi_axes[3])
-    elseif domain isa EllipsoidShellDomain
-        lo = (domain.center[1] - domain.semi_axes[1], domain.center[2] - domain.semi_axes[2], domain.center[3] - domain.semi_axes[3])
-        hi = (domain.center[1] + domain.semi_axes[1], domain.center[2] + domain.semi_axes[2], domain.center[3] + domain.semi_axes[3])
-    else
-        error("Unsupported domain type for spatial grid")
-    end
+    lo, hi = domain_bounds(domain)
 
     nx = max(1, ceil(Int, (hi[1] - lo[1]) / cell_size))
     ny = max(1, ceil(Int, (hi[2] - lo[2]) / cell_size))

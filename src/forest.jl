@@ -27,28 +27,95 @@ mutable struct TerritoryMap
     tree_names::Vector{String}   # index -> name
 end
 
+function _territory_targets(configs::Vector{TreeConfig})
+    raw = [max(cfg.territory_fraction, 0.0) for cfg in configs]
+    total = sum(raw)
+    total > 0.0 || return fill(1.0 / length(configs), length(configs))
+    return raw ./ total
+end
+
+function _territory_owner(
+    refs::Vector{NTuple{3, Float64}},
+    biases::Vector{Float64},
+    point::NTuple{3, Float64},
+)
+    px, py, pz = point
+    best_idx = 1
+    best_score = Inf
+    for (ti, ref) in enumerate(refs)
+        dx = px - ref[1]
+        dy = py - ref[2]
+        dz = pz - ref[3]
+        d = sqrt(dx^2 + dy^2 + dz^2)
+        score = d - biases[ti]
+        if score < best_score
+            best_score = score
+            best_idx = ti
+        end
+    end
+    return best_idx
+end
+
+function _inside_voxel_centers(
+    domain::AbstractDomain,
+    origin::NTuple{3, Float64},
+    cell_size::Float64,
+    dims::NTuple{3, Int},
+)
+    inside = Vector{Tuple{Int, NTuple{3, Float64}}}()
+    nx, ny, nz = dims
+    for iz in 1:nz
+        for iy in 1:ny
+            for ix in 1:nx
+                cx = origin[1] + (ix - 0.5) * cell_size
+                cy = origin[2] + (iy - 0.5) * cell_size
+                cz = origin[3] + (iz - 0.5) * cell_size
+                point = (cx, cy, cz)
+                in_domain(domain, point) || continue
+                flat_idx = ix + (iy - 1) * nx + (iz - 1) * nx * ny
+                push!(inside, (flat_idx, point))
+            end
+        end
+    end
+    return inside
+end
+
+function _territory_reference_points(
+    domain::AbstractDomain,
+    configs::Vector{TreeConfig},
+    anchor_length::Float64,
+)
+    refs = NTuple{3, Float64}[]
+    for cfg in configs
+        dx, dy, dz = cfg.root_direction
+        dlen = sqrt(dx^2 + dy^2 + dz^2)
+        if dlen <= 1e-12
+            push!(refs, cfg.root_position)
+            continue
+        end
+        ref = (
+            cfg.root_position[1] + anchor_length * dx / dlen,
+            cfg.root_position[2] + anchor_length * dy / dlen,
+            cfg.root_position[3] + anchor_length * dz / dlen,
+        )
+        if !in_domain(domain, ref)
+            ref = project_to_domain(domain, ref)
+        end
+        push!(refs, ref)
+    end
+    return refs
+end
+
 """
     initialize_territories(domain, configs) -> TerritoryMap
 
-Create a territory map by assigning each voxel to the nearest tree root.
+Create a territory map by assigning each voxel to a root using a weighted
+distance partition. The weights are iteratively adjusted so the realized
+in-domain voxel fractions approximate each tree's configured
+`territory_fraction`.
 """
 function initialize_territories(domain::AbstractDomain, configs::Vector{TreeConfig})
-    # Compute bounding box
-    if domain isa SphereDomain
-        lo = (domain.center[1] - domain.radius, domain.center[2] - domain.radius, domain.center[3] - domain.radius)
-        hi = (domain.center[1] + domain.radius, domain.center[2] + domain.radius, domain.center[3] + domain.radius)
-    elseif domain isa BoxDomain
-        lo = domain.min_corner
-        hi = domain.max_corner
-    elseif domain isa EllipsoidDomain
-        lo = (domain.center[1] - domain.semi_axes[1], domain.center[2] - domain.semi_axes[2], domain.center[3] - domain.semi_axes[3])
-        hi = (domain.center[1] + domain.semi_axes[1], domain.center[2] + domain.semi_axes[2], domain.center[3] + domain.semi_axes[3])
-    elseif domain isa EllipsoidShellDomain
-        lo = (domain.center[1] - domain.semi_axes[1], domain.center[2] - domain.semi_axes[2], domain.center[3] - domain.semi_axes[3])
-        hi = (domain.center[1] + domain.semi_axes[1], domain.center[2] + domain.semi_axes[2], domain.center[3] + domain.semi_axes[3])
-    else
-        error("Unsupported domain type")
-    end
+    lo, hi = domain_bounds(domain)
 
     # Cell size: ~20 cells per dimension
     extent = max(hi[1] - lo[1], hi[2] - lo[2], hi[3] - lo[3])
@@ -61,30 +128,44 @@ function initialize_territories(domain::AbstractDomain, configs::Vector{TreeConf
     tree_names = [cfg.name for cfg in configs]
     n_cells = nx * ny * nz
     cells = zeros(Int, n_cells)
+    inside = _inside_voxel_centers(domain, lo, cell_size, (nx, ny, nz))
+    anchor_length = 0.35 * extent
+    refs = _territory_reference_points(domain, configs, anchor_length)
 
-    # Assign each cell to nearest root
+    biases = zeros(Float64, length(configs))
+    targets = _territory_targets(configs)
+    if !isempty(inside) && length(configs) > 1
+        counts = zeros(Int, length(configs))
+        gain = 0.35 * cell_size * max(nx, ny, nz)
+        for _ in 1:48
+            fill!(counts, 0)
+            for (_, point) in inside
+                owner = _territory_owner(refs, biases, point)
+                counts[owner] += 1
+            end
+
+            total_inside = sum(counts)
+            total_inside == 0 && break
+            actual = counts ./ total_inside
+            maximum(abs.(actual .- targets)) <= 0.02 && break
+
+            for i in eachindex(biases)
+                biases[i] += gain * (targets[i] - actual[i])
+            end
+
+            biases .-= sum(biases) / length(biases)
+        end
+    end
+
+    # Assign each cell with the calibrated weighted partition.
     for iz in 1:nz
         for iy in 1:ny
             for ix in 1:nx
                 cx = lo[1] + (ix - 0.5) * cell_size
                 cy = lo[2] + (iy - 0.5) * cell_size
                 cz = lo[3] + (iz - 0.5) * cell_size
-
-                best_idx = 1
-                best_dist = Inf
-                for (ti, cfg) in enumerate(configs)
-                    dx = cx - cfg.root_position[1]
-                    dy = cy - cfg.root_position[2]
-                    dz = cz - cfg.root_position[3]
-                    d = sqrt(dx^2 + dy^2 + dz^2)
-                    if d < best_dist
-                        best_dist = d
-                        best_idx = ti
-                    end
-                end
-
                 flat_idx = ix + (iy - 1) * nx + (iz - 1) * nx * ny
-                cells[flat_idx] = best_idx
+                cells[flat_idx] = _territory_owner(refs, biases, (cx, cy, cz))
             end
         end
     end
@@ -159,6 +240,43 @@ function coronary_tree_configs()
         TreeConfig("LCX", (-2.0, -1.0, 0.0), 1.2, (0.0, -1.0, 0.5), 600, 0.25),
         TreeConfig("RCA", (2.0, 0.0, 0.0), 1.3, (0.0, -1.0, 0.0), 800, 0.35),
     ]
+end
+
+coronary_tree_configs(::AbstractDomain) = coronary_tree_configs()
+
+function _rotate_about_axis(v::NTuple{3, Float64}, axis::NTuple{3, Float64}, theta::Float64)
+    ax, ay, az = axis
+    anorm = sqrt(ax * ax + ay * ay + az * az)
+    anorm > 1e-12 || return v
+    ax /= anorm; ay /= anorm; az /= anorm
+
+    vx, vy, vz = v
+    c = cos(theta)
+    s = sin(theta)
+    dot_av = ax * vx + ay * vy + az * vz
+
+    return (
+        vx * c + (ay * vz - az * vy) * s + ax * dot_av * (1.0 - c),
+        vy * c + (az * vx - ax * vz) * s + ay * dot_av * (1.0 - c),
+        vz * c + (ax * vy - ay * vx) * s + az * dot_av * (1.0 - c),
+    )
+end
+
+function _make_perp_axis(v::NTuple{3, Float64})
+    vx, vy, vz = v
+    vnorm = sqrt(vx * vx + vy * vy + vz * vz)
+    vnorm > 1e-12 || return (0.0, 1.0, 0.0)
+    vx /= vnorm; vy /= vnorm; vz /= vnorm
+
+    ax = vy
+    ay = -vx
+    az = 0.0
+    anorm = sqrt(ax * ax + ay * ay + az * az)
+    if anorm < 1e-6
+        ax, ay, az = vz, 0.0, -vx
+        anorm = sqrt(ax * ax + ay * ay + az * az)
+    end
+    return (ax / anorm, ay / anorm, az / anorm)
 end
 
 """
@@ -236,6 +354,54 @@ function coronary_tree_configs(domain::EllipsoidShellDomain)
     ]
 end
 
+function coronary_tree_configs(domain::CSVVolumeDomain)
+    seed_specs = [
+        ("LAD", (1.37769, 0.393763, 3.1823), 0.18, 3000, 0.40, +0.45),
+        ("LCX", (1.36868, 0.383006, 3.00845), 0.165, 2000, 0.25, -0.45),
+        ("RCA", (6.30361, 3.29052, 2.88375), 0.2, 2500, 0.35, +1.10),
+    ]
+
+    configs = TreeConfig[]
+    cx, cy, cz = domain.center
+
+    for (name, raw_root, raw_radius, terminals, territory, angle) in seed_specs
+        root_guess = (
+            raw_root[1] * domain.length_scale,
+            raw_root[2] * domain.length_scale,
+            raw_root[3] * domain.length_scale,
+        )
+        radius = raw_radius * domain.length_scale
+        root = in_domain(domain, root_guess) ? root_guess : project_to_domain(domain, root_guess)
+
+        dx = cx - root[1]
+        dy = cy - root[2]
+        dz = cz - root[3]
+        dlen = sqrt(dx * dx + dy * dy + dz * dz)
+        if dlen > 1e-12
+            dir = (dx / dlen, dy / dlen, dz / dlen)
+        else
+            dir = (0.0, 0.0, -1.0)
+        end
+
+        axis = _make_perp_axis(dir)
+        dir = _rotate_about_axis(dir, axis, angle)
+
+        root_len = radius * 5.0
+        trial = (
+            root[1] + dir[1] * root_len,
+            root[2] + dir[2] * root_len,
+            root[3] + dir[3] * root_len,
+        )
+        if !in_domain(domain, trial)
+            dir = (-dir[1], -dir[2], -dir[3])
+        end
+
+        push!(configs, TreeConfig(name, root, radius, dir, terminals, territory))
+    end
+
+    return configs
+end
+
 """
     CoronaryForest
 
@@ -265,7 +431,7 @@ assigned territory, with inter-tree collision avoidance.
 function generate_coronary_forest(
     domain::AbstractDomain,
     params::MorphometricParams;
-    tree_configs::Vector{TreeConfig}=coronary_tree_configs(),
+    tree_configs::Vector{TreeConfig}=coronary_tree_configs(domain),
     rng::AbstractRNG=Random.default_rng(),
     verbose::Bool=false,
     kassab::Bool=true,
@@ -552,6 +718,8 @@ function _effective_domain_volume(domain::AbstractDomain)
         dy = domain.max_corner[2] - domain.min_corner[2]
         dz = domain.max_corner[3] - domain.min_corner[3]
         return dx * dy * dz
+    elseif domain isa CSVVolumeDomain
+        return domain.volume
     end
     s = _domain_size(domain)
     return s^3
@@ -593,7 +761,7 @@ function generate_kassab_coronary(
     rng::AbstractRNG=Random.default_rng(),
     verbose::Bool=false,
     handoff_order::Int=5,
-    tree_configs::Vector{TreeConfig}=(domain isa EllipsoidShellDomain ? coronary_tree_configs(domain) : coronary_tree_configs()),
+    tree_configs::Vector{TreeConfig}=coronary_tree_configs(domain),
 )
     t_start = time()
 

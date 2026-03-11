@@ -1,6 +1,7 @@
 using Test
 using VesselTree
 using Random
+using DelimitedFiles
 
 @testset "Domain Types" begin
 
@@ -89,6 +90,47 @@ using Random
         @test in_domain(d, (10.0, 20.0, 30.0))
         @test in_domain(d, (15.0, 20.0, 30.0))
         @test !in_domain(d, (15.1, 20.0, 30.0))
+    end
+
+    @testset "CSVVolumeDomain — v3-compatible interface" begin
+        mktempdir() do tmp
+            points = [
+                1.0 0.0 0.0
+                -1.0 0.0 0.0
+                0.0 1.0 0.0
+                0.0 -1.0 0.0
+                0.0 0.0 1.0
+                0.0 0.0 -1.0
+            ]
+            normals = copy(points)
+
+            points_csv = joinpath(tmp, "points.csv")
+            normals_csv = joinpath(tmp, "normals.csv")
+            writedlm(points_csv, points, ',')
+            writedlm(normals_csv, normals, ',')
+
+            d = csv_volume_domain(
+                points_csv,
+                normals_csv;
+                rng=MersenneTwister(7),
+                target_interior=512,
+                max_candidates=8192,
+                batch_size=512,
+                coordinate_scale=1.0,
+            )
+
+            @test d isa CSVVolumeDomain
+            @test d.length_scale ≈ 1.0
+            @test in_domain(d, (0.0, 0.0, 0.0))
+            @test !in_domain(d, (1.5, 0.0, 0.0))
+
+            p = sample_point(d, MersenneTwister(9))
+            @test in_domain(d, p)
+
+            proj = project_to_domain(d, (1.5, 0.0, 0.0))
+            @test in_domain(d, proj)
+            @test signed_distance(d, proj) <= 1e-4
+        end
     end
 
 end
