@@ -141,6 +141,12 @@ function _domain_size(domain::AbstractDomain)
         return max(domain.semi_axes[1], domain.semi_axes[2], domain.semi_axes[3])
     elseif domain isa EllipsoidShellDomain
         return max(domain.semi_axes[1], domain.semi_axes[2], domain.semi_axes[3])
+    elseif domain isa CSVVolumeDomain
+        return max(
+            domain.max_corner[1] - domain.min_corner[1],
+            domain.max_corner[2] - domain.min_corner[2],
+            domain.max_corner[3] - domain.min_corner[3],
+        )
     end
     return 1.0
 end

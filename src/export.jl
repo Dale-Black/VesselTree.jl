@@ -369,11 +369,11 @@ function export_wenbo_txt(tree::VascularTree, filename::AbstractString)
             println(io,
                 lpad(node_id, 6), "  ", lpad(parent_id, 6), "  ", dir, "  ",
                 lpad(string(round(diam_um, digits=6)), 12), "  ",
-                lpad(string(round(len_cm, digits=6)), 12), "  ",
+                lpad(string(round(len_cm, digits=9)), 12), "  ",
                 "    0  ", "    0  ", "    0  ",
-                lpad(string(round(x, digits=6)), 12), "  ",
-                lpad(string(round(y, digits=6)), 12), "  ",
-                lpad(string(round(z, digits=6)), 12))
+                lpad(string(round(x, digits=9)), 12), "  ",
+                lpad(string(round(y, digits=9)), 12), "  ",
+                lpad(string(round(z, digits=9)), 12))
         end
     end
     return filename

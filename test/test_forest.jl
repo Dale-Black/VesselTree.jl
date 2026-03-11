@@ -23,8 +23,8 @@ using Random
     @testset "initialize_territories — sphere domain" begin
         domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
         configs = [
-            TreeConfig("A", (-5.0, 0.0, 0.0), 1.0, (1.0, 0.0, 0.0), 50, 0.5),
-            TreeConfig("B", (5.0, 0.0, 0.0), 1.0, (-1.0, 0.0, 0.0), 50, 0.5),
+            TreeConfig("A", (-5.0, 0.0, 0.0), 1.0, (-1.0, 0.0, 0.0), 50, 0.5),
+            TreeConfig("B", (5.0, 0.0, 0.0), 1.0, (1.0, 0.0, 0.0), 50, 0.5),
         ]
 
         tmap = initialize_territories(domain, configs)
@@ -36,8 +36,8 @@ using Random
     @testset "initialize_territories — correct partition" begin
         domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
         configs = [
-            TreeConfig("Left", (-5.0, 0.0, 0.0), 1.0, (1.0, 0.0, 0.0), 50, 0.5),
-            TreeConfig("Right", (5.0, 0.0, 0.0), 1.0, (-1.0, 0.0, 0.0), 50, 0.5),
+            TreeConfig("Left", (-5.0, 0.0, 0.0), 1.0, (-1.0, 0.0, 0.0), 50, 0.5),
+            TreeConfig("Right", (5.0, 0.0, 0.0), 1.0, (1.0, 0.0, 0.0), 50, 0.5),
         ]
 
         tmap = initialize_territories(domain, configs)
@@ -51,13 +51,42 @@ using Random
         @test right_name == "Right"
     end
 
+    @testset "initialize_territories — honors target fractions" begin
+        domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
+        configs = [
+            TreeConfig("A", (-5.0, 0.0, 0.0), 1.0, (-1.0, 0.0, 0.0), 50, 0.2),
+            TreeConfig("B", (5.0, 0.0, 0.0), 1.0, (1.0, 0.0, 0.0), 50, 0.8),
+        ]
+
+        tmap = initialize_territories(domain, configs)
+        counts = Dict("A" => 0, "B" => 0)
+        nx, ny, nz = tmap.dims
+        for iz in 1:nz
+            for iy in 1:ny
+                for ix in 1:nx
+                    x = tmap.origin[1] + (ix - 0.5) * tmap.cell_size
+                    y = tmap.origin[2] + (iy - 0.5) * tmap.cell_size
+                    z = tmap.origin[3] + (iz - 0.5) * tmap.cell_size
+                    in_domain(domain, (x, y, z)) || continue
+                    counts[query_territory(tmap, x, y, z)] += 1
+                end
+            end
+        end
+
+        total = counts["A"] + counts["B"]
+        frac_a = counts["A"] / total
+        frac_b = counts["B"] / total
+        @test frac_a ≈ 0.2 atol = 0.06
+        @test frac_b ≈ 0.8 atol = 0.06
+    end
+
     # --- sample_in_territory ---
 
     @testset "sample_in_territory — returns points in territory" begin
         domain = SphereDomain((0.0, 0.0, 0.0), 10.0)
         configs = [
-            TreeConfig("Left", (-5.0, 0.0, 0.0), 1.0, (1.0, 0.0, 0.0), 50, 0.5),
-            TreeConfig("Right", (5.0, 0.0, 0.0), 1.0, (-1.0, 0.0, 0.0), 50, 0.5),
+            TreeConfig("Left", (-5.0, 0.0, 0.0), 1.0, (-1.0, 0.0, 0.0), 50, 0.5),
+            TreeConfig("Right", (5.0, 0.0, 0.0), 1.0, (1.0, 0.0, 0.0), 50, 0.5),
         ]
 
         tmap = initialize_territories(domain, configs)

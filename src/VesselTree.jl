@@ -7,6 +7,7 @@ using Distributions
 using StaticArrays
 using JLD2
 using WriteVTK
+using DelimitedFiles
 
 # Scientific constants
 const MURRAY_GAMMA = 7 / 3           # Huo-Kassab 2007 (NOT 3.0)
@@ -40,8 +41,8 @@ include("export.jl")
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
 export MorphometricParams, kassab_coronary_params, kassab_rca_params, kassab_lad_params, kassab_lcx_params, classify_order
-export AbstractDomain, SphereDomain, BoxDomain, EllipsoidDomain, EllipsoidShellDomain
-export in_domain, sample_point, signed_distance, project_to_domain, default_coronary_domain
+export AbstractDomain, SphereDomain, BoxDomain, EllipsoidDomain, EllipsoidShellDomain, CSVVolumeDomain
+export in_domain, sample_point, signed_distance, project_to_domain, default_coronary_domain, csv_volume_domain, default_coronary_volume_domain, domain_bounds
 export point_segment_distance, point_segment_distance_sq
 export compute_all_distances!, find_nearest_segments
 export segments_intersect, segments_min_distance_sq

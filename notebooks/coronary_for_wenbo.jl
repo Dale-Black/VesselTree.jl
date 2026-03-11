@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.13
+# v0.20.21
 
 using Markdown
 using InteractiveUtils
@@ -27,28 +27,40 @@ using Statistics
 md"""
 # Coronary Arterial Tree Generation — VesselTree.jl
 
-Pure CCO (Constrained Constructive Optimization) growth matching the svVascularize approach. Murray's law radii (γ = 7/3). Domain is an ellipsoid shell modeling the myocardial wall.
+Pure CCO (Constrained Constructive Optimization) growth matching the svVascularize approach. Murray's law radii (γ = 7/3). Domain is reconstructed from Wenbo's CSV heart volume.
 """
 
 # ╔═╡ 87657f8c-3c2b-4f06-b89d-b77de7bdae8b
 md"""
 ## Step 1: Define the Heart Domain
 
-The domain is an **ellipsoid shell** modeling the myocardial wall:
-- **a = 50mm** (left-right), **b = 35mm** (anterior-posterior), **c = 45mm** (base-apex)
-- **thickness = 30%** → wall ~10-15mm, matching real myocardium
+The domain is built from Wenbo's heart surface CSVs:
+- `heart_points_unique.csv`
+- `heart_normals_unique.csv`
+
+This keeps the existing `VesselTree.jl` growth pipeline intact while replacing
+the original analytic ellipsoid shell with the v3 heart volume.
+
+Internally the CSV coordinates are rescaled from Wenbo's centimeter-like units
+to VesselTree's millimeter convention so the growth geometry and Murray-law
+radii stay in a physically consistent length scale.
 """
 
 # ╔═╡ bd7d2e5c-f5ea-4dad-a131-0b61d4b99de6
-domain = default_coronary_domain()  # EllipsoidShellDomain
+domain = default_coronary_volume_domain()
+
+# ╔═╡ e1d44ebb-e7e7-45e5-b649-6d166a0721d6
+
 
 # ╔═╡ 7f5bdb8c-d128-4324-9b57-db15adac6de3
 md"""
-**Domain:** `EllipsoidShellDomain`
+**Domain:** `$(nameof(typeof(domain)))`
 - Center: $(domain.center)
-- Semi-axes: $(domain.semi_axes) mm
-- Shell thickness: $(domain.thickness) ($(round(domain.thickness * 100))%)
-- Wall thickness: ~$(round(minimum(domain.semi_axes) * domain.thickness, digits=1)) – $(round(maximum(domain.semi_axes) * domain.thickness, digits=1)) mm
+- Bounding box min: $(domain.min_corner)
+- Bounding box max: $(domain.max_corner)
+- Monte Carlo volume estimate: $(round(domain.volume, digits=3))
+- CSV → internal length scale: $(domain.length_scale)x
+- Cached interior sample count: $(size(domain.interior_points, 1))
 """
 
 # ╔═╡ 28d33479-2192-4cc2-8e2f-d1dd2772fb69
@@ -62,9 +74,47 @@ md"""
 | **RCA** | Right wall (35%) | Right-anterior |
 """
 
+# ╔═╡ 6df19e82-fa9f-4e26-bc54-7199d330abb8
+md"""
+## Step 3: Growth Parameters
+
+Murray's law exponent γ = 7/3 (Huo-Kassab 2007). Per-artery Kassab morphometric params provide the CCO handoff order and the statistically reconstructed microvascular tree below that handoff.
+"""
+
+# ╔═╡ 33573674-ea88-406b-b3c6-9013b976ee37
+params_rca = kassab_rca_params();
+
+# ╔═╡ d9f3a362-4a35-41b6-9316-e8efc6753f0a
+begin
+	handoff_order = 5
+	target_terminals = Dict(
+		"LAD" => 7200,
+		"LCX" => 3600,
+		"RCA" => 7800,
+	)
+	territory_fractions = Dict(
+		"LAD" => 0.40,
+		"LCX" => 0.25,
+		"RCA" => 0.35,
+	)
+
+	base_configs = VesselTree.coronary_tree_configs(domain)
+	tree_configs = [
+		VesselTree.TreeConfig(
+			cfg.name,
+			cfg.root_position,
+			cfg.root_radius,
+			cfg.root_direction,
+			get(target_terminals, cfg.name, cfg.target_terminals),
+			get(territory_fractions, cfg.name, cfg.territory_fraction),
+		)
+		for cfg in base_configs
+	]
+end
+
 # ╔═╡ b26965de-6069-4c3d-a9c9-8be15d74bf10
 begin
-	configs = VesselTree.coronary_tree_configs(domain)
+	configs = tree_configs
 
 	config_rows = join([
 		"| $(cfg.name) | ($(round.(cfg.root_position, digits=1))) | $(cfg.root_radius) mm | $(cfg.target_terminals) | $(round(cfg.territory_fraction * 100))% |"
@@ -79,19 +129,24 @@ Markdown.parse("""
 $config_rows
 """)
 
-# ╔═╡ 6df19e82-fa9f-4e26-bc54-7199d330abb8
-md"""
-## Step 3: Growth Parameters
-
-Murray's law exponent γ = 7/3 (Huo-Kassab 2007). Per-artery Kassab morphometric params provide terminal radii for CCO handoff.
-"""
-
-# ╔═╡ 33573674-ea88-406b-b3c6-9013b976ee37
-params_rca = kassab_rca_params();
-
 # ╔═╡ 0a987a32-e3d5-44c5-b6a9-d2cf0b29bde1
 md"""
 γ = $(params_rca.gamma), $(params_rca.n_orders) Strahler orders
+
+Paper-consistent default for flow comparison:
+- `handoff_order = $(handoff_order)` so each CCO terminal is statistically subdivided into the downstream microvascular tree.
+- `handoff_order = 0` leaves only the CCO skeleton, which gives far too few parallel terminal pathways to compare against the 2007/2008 porcine reconstructions.
+- `target_terminals = $(target_terminals)` sets the CCO skeleton resolution before statistical subdivision.
+- `territory_fractions = $(territory_fractions)` sets the intended myocardial territory split.
+
+Edit only this one parameter block when calibrating toward the paper:
+- `handoff_order`
+- `target_terminals["LAD"]`
+- `target_terminals["LCX"]`
+- `target_terminals["RCA"]`
+- `territory_fractions["LAD"]`
+- `territory_fractions["LCX"]`
+- `territory_fractions["RCA"]`
 """
 
 # ╔═╡ acb6d732-8524-4e60-85d3-a5bc4fa56d86
@@ -135,7 +190,8 @@ begin
 	"""
 	function plot_tree_3d_depth!(ax, tree;
 			max_depth=typemax(Int), max_segments=typemax(Int),
-			lw_min=0.3, lw_max=5.0, alpha=0.9)
+			lw_min=0.3, lw_max=5.0, alpha=0.9,
+			min_diameter_um=0.0)
 		seg = tree.segments
 		topo = tree.topology
 		n = seg.n
@@ -168,6 +224,7 @@ begin
 			for cid_raw in (topo.child1_id[i], topo.child2_id[i], topo.child3_id[i])
 				cid = Int(cid_raw)
 				(cid <= 0 || cid > n) && continue
+				(2.0 * Float64(seg.radius[cid]) * 1000.0) < min_diameter_um && continue
 				push!(edges, (i, cid, depth[cid]))
 			end
 		end
@@ -239,7 +296,8 @@ begin
 	"""Plot tree with a single base color, linewidth from radius."""
 	function plot_tree_single_color!(ax, tree; color=:red,
 			max_depth=typemax(Int), max_segments=typemax(Int),
-			lw_min=0.3, lw_max=5.0, alpha=0.9)
+			lw_min=0.3, lw_max=5.0, alpha=0.9,
+			min_diameter_um=0.0)
 		seg = tree.segments
 		topo = tree.topology
 		n = seg.n
@@ -268,6 +326,7 @@ begin
 			for cid_raw in (topo.child1_id[i], topo.child2_id[i], topo.child3_id[i])
 				cid = Int(cid_raw)
 				(cid <= 0 || cid > n) && continue
+				(2.0 * Float64(seg.radius[cid]) * 1000.0) < min_diameter_um && continue
 				push!(edges, (i, cid))
 			end
 		end
@@ -307,8 +366,17 @@ begin
 		return length(edges)
 	end
 
-	# Helper: draw shell wireframe
+	# Helper: draw analytic shell or point-cloud surface context
 	function draw_shell_wireframe!(ax, dom; nθ=30, nφ=15, color=(:grey70, 0.5))
+		if dom isa CSVVolumeDomain
+			n = size(dom.surface_points, 1)
+			step = max(1, cld(n, 2500))
+			pts = dom.surface_points[1:step:end, :]
+			scatter!(ax, pts[:, 1], pts[:, 2], pts[:, 3];
+				color=color, markersize=2)
+			return
+		end
+
 		θr = range(0, 2π, length=nθ)
 		φr = range(0, π, length=nφ)
 		a, b, c = dom.semi_axes
@@ -335,6 +403,9 @@ begin
 		distal = (cfg_lad.root_position[1] + dx * root_len,
 		          cfg_lad.root_position[2] + dy * root_len,
 		          cfg_lad.root_position[3] + dz * root_len)
+		if !in_domain(domain, distal)
+			distal = project_to_domain(domain, distal)
+		end
 		add_segment!(tr, cfg_lad.root_position, distal, cfg_lad.root_radius, Int32(-1))
 		grow_tree!(tr, domain, nt, params_rca; rng=MersenneTwister(42), kassab=true)
 		push!(stage_trees, tr)
@@ -400,20 +471,24 @@ $(join(rows, "\n"))
 
 # ╔═╡ 4718d9a5-2dc9-408d-9afb-4f039765cace
 md"""
-## Step 6: Full CCO Growth — All 3 Arteries
+## Step 6: Full Coronary Growth — All 3 Arteries
 
-Simultaneous round-robin CCO growth with inter-tree collision avoidance and territory partitioning. No subdivision — pure CCO matching Wenbo's svVascularize approach.
+Simultaneous round-robin CCO growth with inter-tree collision avoidance and territory partitioning, followed by Kassab connectivity-matrix subdivision below the handoff order.
+
+This keeps the existing v4 growth model intact:
+- CCO builds the resolving skeleton in the v3 heart volume
+- Murray's law sets radii throughout
+- Kassab morphometry fills in the distal microvascular tree without hand-tuning diameters for flow targets
 """
 
 # ╔═╡ a0109729-5424-438c-8adb-8def433a9cb6
 begin
-	# CCO-only growth WITH inter-tree collision avoidance
-	# handoff_order=0 skips subdivision entirely
 	forest = generate_kassab_coronary(
 		domain, params_rca;
 		rng=MersenneTwister(42),
 		verbose=false,
-		handoff_order=0,
+		handoff_order=handoff_order,
+		tree_configs=tree_configs,
 	)
 	cco_trees = Dict(name => tree for (name, tree) in forest.trees)
 
@@ -422,7 +497,10 @@ end
 
 # ╔═╡ adc5e9ae-fa33-48f1-98a1-396502a6d4c1
 md"""
-**CCO result:** $(cco_total) total segments (with inter-tree collision avoidance)
+**Tree generation result:** $(cco_total) total segments (`handoff_order = $(handoff_order)`)
+
+**Configured CCO target terminals:** `$(target_terminals)`
+**Configured territory fractions:** `$(territory_fractions)`
 
 | Artery | Segments | Terminals |
 |:-------|:---------|:----------|
@@ -436,6 +514,12 @@ md"""
 ### Per-Artery Views (depth-colored)
 """
 
+# ╔═╡ d2100001-0000-0000-0000-000000000001
+begin
+	macro_max_depth = 14
+	macro_min_diameter_um = 180.0
+end
+
 # ╔═╡ 941e4826-8025-450b-bd3c-ea7367f423fe
 begin
 	artery_colors = Dict("LAD" => :crimson, "LCX" => :dodgerblue, "RCA" => :limegreen)
@@ -448,7 +532,7 @@ begin
 		n = tree.segments.n
 
 		ax = Axis3(fig_per[row, 1],
-			title="$name — CCO ($n seg)",
+			title="$name — full tree ($n seg)",
 			xlabel="X", ylabel="Y", zlabel="Z",
 			titlesize=14,
 			azimuth=1.3, elevation=0.3)
@@ -461,13 +545,47 @@ begin
 	fig_per
 end
 
+# ╔═╡ d2100002-0000-0000-0000-000000000001
+md"""
+### Macro Trunk Views
+
+For million-segment trees, the full-depth plot becomes a microvascular cloud.
+This view shows only the larger, proximal branches:
+- `max_depth = $(macro_max_depth)`
+- `min_diameter = $(macro_min_diameter_um) μm`
+"""
+
+# ╔═╡ d2100003-0000-0000-0000-000000000001
+begin
+	fig_macro = Figure(size=(1000, 2400))
+
+	for (row, name) in enumerate(["LAD", "LCX", "RCA"])
+		tree = cco_trees[name]
+		n = tree.segments.n
+
+		ax = Axis3(fig_macro[row, 1],
+			title="$name — macro trunk view ($n seg total)",
+			xlabel="X", ylabel="Y", zlabel="Z",
+			titlesize=14,
+			azimuth=1.3, elevation=0.3)
+		draw_shell_wireframe!(ax, domain)
+		plot_tree_3d_depth!(ax, tree;
+			max_depth=macro_max_depth,
+			min_diameter_um=macro_min_diameter_um,
+			max_segments=draw_max_segments,
+			lw_min=0.8, lw_max=8.0, alpha=0.95)
+	end
+
+	fig_macro
+end
+
 # ╔═╡ d2000001-0000-0000-0000-000000000001
 begin
 	# Combined 3-artery view — per-artery color to distinguish trees
 	fig_3d = Figure(size=(1000, 800))
 
 	ax_combined = Axis3(fig_3d[1, 1],
-		title="All Arteries — CCO",
+		title="All Arteries — macro trunk view",
 		xlabel="X", ylabel="Y", zlabel="Z",
 		titlesize=14,
 		azimuth=1.3, elevation=0.3)
@@ -476,9 +594,9 @@ begin
 		tree = cco_trees[name]
 		plot_tree_single_color!(ax_combined, tree;
 			color=artery_colors[name],
-			# max_depth=typemax(Int),
-			max_depth=20,
-			max_segments=draw_max_segments, lw_min=0.3, lw_max=5.0, alpha=0.9)
+			max_depth=macro_max_depth,
+			min_diameter_um=macro_min_diameter_um,
+			max_segments=draw_max_segments, lw_min=0.8, lw_max=8.0, alpha=0.95)
 	end
 
 	fig_3d
@@ -585,7 +703,7 @@ md"""
 Export each tree as a text file matching Wenbo's format (11 columns):
 
 ```
-node_id  parent_id  direction  diameter(μm)  length(μm)  0  0  0  x  y  z
+node_id  parent_id  direction  diameter(μm)  length(cm)  0  0  0  x(cm)  y(cm)  z(cm)
 ```
 
 This is directly compatible with Wenbo's `flow_simulation_2025_Nov.ipynb` loader.
@@ -613,7 +731,7 @@ begin
 	$(preview)
 	```
 
-	**Column format:** `node_id  parent_id  dir  diameter(μm)  length(μm)  0  0  0  x(mm)  y(mm)  z(mm)`
+	**Column format:** `node_id  parent_id  dir  diameter(μm)  length(cm)  0  0  0  x(cm)  y(cm)  z(cm)`
 	"""
 end
 
@@ -621,7 +739,7 @@ end
 md"""
 ## Summary
 
-Pure CCO growth with Murray's law radii (γ = 7/3) and inter-tree collision avoidance. Domain is an ellipsoid shell modeling the myocardial wall. Text files exported in Wenbo's format for flow simulation.
+CCO skeleton growth with Murray's law radii (γ = 7/3), Kassab statistical subdivision, and inter-tree collision avoidance inside Wenbo's reconstructed heart volume. Text files are exported in Wenbo's format for flow simulation.
 """
 
 # ╔═╡ f1000001-0000-0000-0000-000000000001
@@ -632,18 +750,35 @@ md"""
 
 Reads the exported `.txt` files, builds a binary tree, computes Poiseuille resistance with Pries (1994) in-vivo viscosity, prunes oversized leaf nodes ("leakages"), and solves for flow/pressure.
 
+This port keeps Wenbo's file convention of `diameter(μm)` and `length(cm)`.
+For comparison with the 2008 Molloi/Wong normal-tree model, the outlet
+pressure is set to pre-capillary pressure `Pc = Pv + 10 mmHg = 15 mmHg`
+when venous pressure is `Pv = 5 mmHg`.
+
+Paper-mode option:
+- the 2008 paper reports a `1.6×` dilation for arterioles `< 400 μm`
+- in this notebook, that is implemented conservatively as an optional
+  arteriole-only ramp: `80 μm → 1.0×`, smoothly increasing to
+  `400 μm → 1.6×`
+- this is an implementation inference for a capillary-resolved synthetic tree;
+  it changes only the hemodynamic evaluation, not the generated tree geometry
+  or Murray-law radii stored in the tree/export
+
 **Changes from Python original:**
-- Fixed length unit: `length × 1e-6` (microns → meters), not `× 0.01`
+- Preserves Wenbo's `length(cm) → meters` conversion via `length × 0.01`
+- Uses pre-capillary outlet pressure `Pc = 15 mmHg` for arterial-tree flow
+- Supports optional conservative 2008 paper-mode arteriole dilation
 - Added pruning of oversized leaf nodes (leaked large vessels that were never subdivided)
 - Handles single-child nodes (series connection) after pruning
 
 | Python constant | Value | Julia name |
 |:----------------|:------|:-----------|
 | `Pin` | 100 mmHg × 133.32 = 13332.24 Pa | `FLOW_Pin` |
-| `Pout` | 5 mmHg × 133.32 = 666.61 Pa | `FLOW_Pout` |
+| `Pout` | 15 mmHg × 133.32 = 1999.84 Pa | `FLOW_Pout` |
 | `TOLERANCE` | 0.001 | `FLOW_TOLERANCE` |
 | `micron2m` | 1e-6 | `FLOW_micron2m` |
 | `m3pers2mLpermin` | 6e7 | `FLOW_m3s_to_mLmin` |
+| `paper-mode` | `80–400 μm arteriole ramp to 1.6×` | `FLOW_PAPER_2008_MODE` |
 """
 
 # ╔═╡ f1000002-0000-0000-0000-000000000001
@@ -653,7 +788,7 @@ begin
 		label::Int
 		parent_label::Int
 		diameter::Float64        # μm
-		len::Float64             # μm
+		len::Float64             # cm (Wenbo export convention)
 		direction::String
 		Rs::Float64              # Segment resistance (N·s/m⁵)
 		Rc::Float64              # Crown resistance (subtree equivalent)
@@ -679,7 +814,11 @@ begin
 	FLOW_m3s_to_mLmin = 1e6 * 60.0
 	FLOW_TOLERANCE    = 0.001
 	FLOW_Pin          = 100 * FLOW_mmHg2Pa   # 100 mmHg inlet
-	FLOW_Pout         = 5 * FLOW_mmHg2Pa     # 5 mmHg outlet
+	FLOW_Pout         = 15 * FLOW_mmHg2Pa    # pre-capillary outlet (Pv=5 mmHg, Pc=15 mmHg)
+	FLOW_PAPER_2008_MODE = true
+	FLOW_PAPER_ARTERIOLE_MIN_UM = 80.0
+	FLOW_PAPER_DILATION_THRESHOLD_UM = 400.0
+	FLOW_PAPER_DILATION_FACTOR = 1.6
 end
 
 # ╔═╡ f1000003-0000-0000-0000-000000000001
@@ -706,6 +845,17 @@ begin
 						(D / (D - 1.1))^2
 
 		return viscosity_rel * mu_plasma * 0.1   # Poise → Pa·s
+	end
+
+	function flow_effective_diameter_um(diameter_um::Float64)
+		if FLOW_PAPER_2008_MODE &&
+		   FLOW_PAPER_ARTERIOLE_MIN_UM <= diameter_um <= FLOW_PAPER_DILATION_THRESHOLD_UM
+			t = (diameter_um - FLOW_PAPER_ARTERIOLE_MIN_UM) /
+				(FLOW_PAPER_DILATION_THRESHOLD_UM - FLOW_PAPER_ARTERIOLE_MIN_UM)
+			factor = 1.0 + clamp(t, 0.0, 1.0) * (FLOW_PAPER_DILATION_FACTOR - 1.0)
+			return diameter_um * factor
+		end
+		return diameter_um
 	end
 
 	# ── Two-pass tree loader ───────────────────────────────────────────
@@ -812,9 +962,10 @@ begin
 	function flow_update_physics!(node::Union{FlowNode, Nothing})
 		node === nothing && return 1e-20
 
-		mu = flow_viscosity_pries(node.diameter)
-		L_m = node.len * FLOW_micron2m          # μm → m (Python had * 0.01 bug)
-		D_m = node.diameter * FLOW_micron2m     # μm → m
+		eff_diameter = flow_effective_diameter_um(node.diameter)
+		mu = flow_viscosity_pries(eff_diameter)
+		L_m = node.len * 0.01                   # cm → m (Wenbo file convention)
+		D_m = eff_diameter * FLOW_micron2m      # μm → m
 		L_m <= 0.0 && (L_m = 1e-9)
 
 		Rs_SI = (128.0 * mu * L_m) / (π * D_m^4)
@@ -1014,13 +1165,17 @@ end
 
 # ╔═╡ 6277c28f-6ebe-4209-81d6-19e75cadc3e2
 Markdown.parse("""
-**Flow Simulation Results (Pries viscosity, 100 mmHg inlet, 5 mmHg outlet):**
+**Flow Simulation Results (Pries viscosity, 100 mmHg inlet, 15 mmHg pre-capillary outlet, paper-mode = $(FLOW_PAPER_2008_MODE)):**
 
 | Artery | Flow (mL/min) | Leaf Nodes | Min D (μm) | Max D (μm) | Avg D (μm) |
 |:-------|:--------------|:-----------|:-----------|:-----------|:-----------|
 $(join(flow_summary_rows, "\n"))
 
 *Oversized leaf nodes (>50 μm diameter) pruned before simulation.*
+
+$(FLOW_PAPER_2008_MODE ?
+"*2008 paper-mode enabled: segments in the $(Int(FLOW_PAPER_ARTERIOLE_MIN_UM))–$(Int(FLOW_PAPER_DILATION_THRESHOLD_UM)) μm arteriole band are smoothly dilated up to $(FLOW_PAPER_DILATION_FACTOR)× during resistance calculation.*" :
+"*2008 paper-mode disabled: flow uses the exported diameters directly.*")
 """)
 
 # ╔═╡ Cell order:
@@ -1032,12 +1187,14 @@ $(join(flow_summary_rows, "\n"))
 # ╟─e4965a7a-0800-49fb-93b9-be63caf2111f
 # ╟─87657f8c-3c2b-4f06-b89d-b77de7bdae8b
 # ╠═bd7d2e5c-f5ea-4dad-a131-0b61d4b99de6
+# ╠═e1d44ebb-e7e7-45e5-b649-6d166a0721d6
 # ╟─7f5bdb8c-d128-4324-9b57-db15adac6de3
 # ╟─28d33479-2192-4cc2-8e2f-d1dd2772fb69
 # ╠═b26965de-6069-4c3d-a9c9-8be15d74bf10
 # ╟─52055f05-592d-473a-88a8-eb4a5034065d
 # ╟─6df19e82-fa9f-4e26-bc54-7199d330abb8
 # ╠═33573674-ea88-406b-b3c6-9013b976ee37
+# ╠═d9f3a362-4a35-41b6-9316-e8efc6753f0a
 # ╟─0a987a32-e3d5-44c5-b6a9-d2cf0b29bde1
 # ╟─acb6d732-8524-4e60-85d3-a5bc4fa56d86
 # ╟─7fcc9a94-7cf4-4fdb-9e22-6e3bacd643a2
@@ -1049,7 +1206,10 @@ $(join(flow_summary_rows, "\n"))
 # ╠═a0109729-5424-438c-8adb-8def433a9cb6
 # ╟─adc5e9ae-fa33-48f1-98a1-396502a6d4c1
 # ╟─28f107f7-1f6f-4329-9f5b-a125f19675f3
+# ╠═d2100001-0000-0000-0000-000000000001
 # ╟─941e4826-8025-450b-bd3c-ea7367f423fe
+# ╟─d2100002-0000-0000-0000-000000000001
+# ╟─d2100003-0000-0000-0000-000000000001
 # ╟─d2000001-0000-0000-0000-000000000001
 # ╟─69e142f1-228e-409d-a096-09b391d3a026
 # ╠═091f9ae7-29f9-4514-b449-91fdc8c31e7e
