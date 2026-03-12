@@ -36,8 +36,8 @@ md"""
 ## Step 1: Define the Heart Domain
 
 The domain is built from Wenbo's heart surface CSVs:
-- `heart_points_unique.csv`
-- `heart_normals_unique.csv`
+- `v4/model_CSVs/heart_points_unique.csv`
+- `v4/model_CSVs/heart_normals_unique.csv`
 
 This keeps the existing `VesselTree.jl` growth pipeline intact while replacing
 the original analytic ellipsoid shell with the v3 heart volume.
@@ -823,7 +823,7 @@ begin
 	FLOW_TOLERANCE    = 0.001
 	FLOW_Pin          = 100 * FLOW_mmHg2Pa   # 100 mmHg inlet
 	FLOW_Pout         = 15 * FLOW_mmHg2Pa    # pre-capillary outlet (Pv=5 mmHg, Pc=15 mmHg)
-	FLOW_ENABLE_VASODILATION = false
+	FLOW_ENABLE_VASODILATION = true
 	FLOW_VASODILATION_MIN_DIAMETER_UM = 0.0
 	FLOW_VASODILATION_MAX_DIAMETER_UM = 400.0
 	FLOW_VASODILATION_FACTOR = 1.6

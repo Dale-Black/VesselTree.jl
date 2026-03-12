@@ -219,9 +219,10 @@ end
     CSVVolumeDomain
 
 Volume domain reconstructed from a surface point cloud and outward normals.
-The surface comes from Wenbo's CSV export (`heart_points_unique.csv`,
-`heart_normals_unique.csv`). Interior sampling is precomputed once so the
-existing CCO code can keep calling `sample_point(domain, rng)` unchanged.
+The surface comes from Wenbo's CSV export in `v4/model_CSVs`
+(`heart_points_unique.csv`, `heart_normals_unique.csv`). Interior sampling is
+precomputed once so the existing CCO code can keep calling
+`sample_point(domain, rng)` unchanged.
 """
 struct CSVVolumeDomain <: AbstractDomain
     surface_points::Matrix{Float64}
@@ -457,10 +458,10 @@ function csv_volume_domain(
 end
 
 function default_coronary_volume_domain(; kwargs...)
-    repo_root = dirname(dirname(@__DIR__))
+    repo_root = dirname(@__DIR__)
     return csv_volume_domain(
-        joinpath(repo_root, "heart_points_unique.csv"),
-        joinpath(repo_root, "heart_normals_unique.csv");
+        joinpath(repo_root, "model_CSVs", "heart_points_unique.csv"),
+        joinpath(repo_root, "model_CSVs", "heart_normals_unique.csv");
         kwargs...,
     )
 end
