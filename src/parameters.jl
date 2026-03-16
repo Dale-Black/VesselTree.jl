@@ -356,3 +356,44 @@ function classify_order(params::MorphometricParams, diameter_um::Float64)
     end
     return -1
 end
+
+"""
+    with_hemodynamics(params; root_pressure=params.root_pressure,
+                      terminal_pressure=params.terminal_pressure,
+                      blood_viscosity=params.blood_viscosity) -> MorphometricParams
+
+Return a copy of `params` with updated hemodynamic boundary conditions.
+Useful when reusing the same morphometry under different flow conditions.
+"""
+function with_hemodynamics(
+    params::MorphometricParams;
+    root_pressure::Float64=params.root_pressure,
+    terminal_pressure::Float64=params.terminal_pressure,
+    blood_viscosity::Float64=params.blood_viscosity,
+)
+    return MorphometricParams(
+        params.artery_name,
+        params.gamma,
+        copy(params.diameter_mean),
+        copy(params.diameter_sd),
+        copy(params.length_mean),
+        copy(params.length_sd),
+        copy(params.diameter_mean_elem),
+        copy(params.diameter_sd_elem),
+        copy(params.length_mean_elem),
+        copy(params.length_sd_elem),
+        copy(params.se_ratio),
+        copy(params.element_count_target),
+        copy(params.diameter_bounds),
+        copy(params.connectivity_matrix),
+        params.asymmetry_alpha,
+        params.asymmetry_beta,
+        params.trifurcation_chi_th,
+        params.sprouting_rho_th,
+        blood_viscosity,
+        root_pressure,
+        terminal_pressure,
+        params.vessel_cutoff_um,
+        params.n_orders,
+    )
+end

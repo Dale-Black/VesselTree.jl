@@ -5,6 +5,9 @@
 
 Compute Poiseuille resistance for all active segments using AK kernel:
   R[i] = 8 * mu * L[i] / (pi * r[i]^4)
+
+Geometry in `VascularTree` is stored in millimeters, so lengths and radii are
+converted to meters before applying the SI-form Poiseuille law.
 """
 function compute_resistances!(tree::VascularTree, viscosity::Float64)
     seg = tree.segments
@@ -18,7 +21,9 @@ function compute_resistances!(tree::VascularTree, viscosity::Float64)
     coeff = 8.0 * viscosity / π
 
     AK.foreachindex(res_view) do i
-        res_view[i] = coeff * len_view[i] / (rad_view[i]^4)
+        len_m = len_view[i] * 1e-3
+        rad_m = rad_view[i] * 1e-3
+        res_view[i] = coeff * len_m / (rad_m^4)
     end
     return nothing
 end

@@ -106,6 +106,35 @@ function _territory_reference_points(
     return refs
 end
 
+function _clear_local_intersection_neighborhood!(
+    flags::Vector{Bool},
+    topo,
+    seg_idx::Int;
+    hop_limit::Int=8,
+)
+    queue = Tuple{Int32, Int}[(Int32(seg_idx), 0)]
+    seen = Set{Int32}()
+
+    while !isempty(queue)
+        current, depth = popfirst!(queue)
+        current > 0 || continue
+        current in seen && continue
+        push!(seen, current)
+        flags[current] = false
+
+        depth >= hop_limit && continue
+
+        parent = topo.parent_id[current]
+        parent > 0 && push!(queue, (parent, depth + 1))
+
+        for child in (topo.child1_id[current], topo.child2_id[current], topo.child3_id[current])
+            child > 0 && push!(queue, (child, depth + 1))
+        end
+    end
+
+    return flags
+end
+
 """
     initialize_territories(domain, configs) -> TerritoryMap
 
@@ -402,6 +431,67 @@ function coronary_tree_configs(domain::CSVVolumeDomain)
     return configs
 end
 
+function fixed_tree_configs(
+    trees::Dict{String, VascularTree};
+    target_terminals::Dict{String, Int},
+    territory_fractions::Dict{String, Float64}=Dict(
+        "LAD" => 0.40,
+        "LCX" => 0.25,
+        "RCA" => 0.35,
+    ),
+)
+    configs = TreeConfig[]
+    for name in sort(collect(keys(trees)))
+        tree = trees[name]
+        root_id = tree.root_segment_id
+        root_id > 0 || error("Tree `$name` has no root segment.")
+        seg = tree.segments
+        topo = tree.topology
+        prox = (
+            seg.proximal_x[root_id],
+            seg.proximal_y[root_id],
+            seg.proximal_z[root_id],
+        )
+
+        terminal_points = NTuple{3, Float64}[]
+        for id in 1:topo.n
+            topo.is_terminal[id] || continue
+            push!(
+                terminal_points,
+                (seg.distal_x[id], seg.distal_y[id], seg.distal_z[id]),
+            )
+        end
+
+        anchor =
+            if isempty(terminal_points)
+                (seg.distal_x[root_id], seg.distal_y[root_id], seg.distal_z[root_id])
+            else
+                n_terminal = length(terminal_points)
+                (
+                    sum(pt[1] for pt in terminal_points) / n_terminal,
+                    sum(pt[2] for pt in terminal_points) / n_terminal,
+                    sum(pt[3] for pt in terminal_points) / n_terminal,
+                )
+            end
+
+        dx = anchor[1] - prox[1]
+        dy = anchor[2] - prox[2]
+        dz = anchor[3] - prox[3]
+        dlen = sqrt(dx^2 + dy^2 + dz^2)
+        if dlen <= 0
+            dx = seg.distal_x[root_id] - prox[1]
+            dy = seg.distal_y[root_id] - prox[2]
+            dz = seg.distal_z[root_id] - prox[3]
+            dlen = sqrt(dx^2 + dy^2 + dz^2)
+        end
+        dir = dlen > 0 ? (dx / dlen, dy / dlen, dz / dlen) : (1.0, 0.0, 0.0)
+        terminals = get(target_terminals, name, tree.n_terminals)
+        territory = get(territory_fractions, name, 1.0 / max(length(trees), 1))
+        push!(configs, TreeConfig(name, prox, seg.radius[root_id], dir, terminals, territory))
+    end
+    return configs
+end
+
 """
     CoronaryForest
 
@@ -420,6 +510,160 @@ end
 function CoronaryForest(trees, tmap, params::MorphometricParams)
     tp = Dict{String, MorphometricParams}(name => params for name in keys(trees))
     return CoronaryForest(trees, tmap, params, tp)
+end
+
+function continue_coronary_forest(
+    domain::AbstractDomain,
+    trees::Dict{String, VascularTree},
+    params::MorphometricParams;
+    tree_configs::Vector{TreeConfig},
+    rng::AbstractRNG=Random.default_rng(),
+    verbose::Bool=false,
+    kassab::Bool=true,
+)
+    gamma = params.gamma
+    tmap = initialize_territories(domain, tree_configs)
+    domain_size = _domain_size(domain)
+
+    buffers = Dict{String, NamedTuple}()
+    grids = Dict{String, SpatialGrid}()
+    last_rebuild = Dict{String, Int}()
+    grid_rebuild_interval = 100
+
+    for cfg in tree_configs
+        tree = trees[cfg.name]
+        cap = tree.segments.capacity
+        buffers[cfg.name] = (
+            distances = zeros(cap),
+            costs = zeros(cap),
+            bifurc_t = zeros(cap),
+            intersect = Vector{Bool}(undef, cap),
+        )
+        cs = _grid_cell_size(domain_size, max(tree.segments.n, 10))
+        grids[cfg.name] = build_grid(tree.segments, tree.segments.n, domain, cs)
+        last_rebuild[cfg.name] = tree.segments.n
+    end
+
+    terminal_radius = params.diameter_mean[1] / 2.0 / 1000.0
+    remaining_targets = Dict(cfg.name => max(cfg.target_terminals - trees[cfg.name].n_terminals, 0) for cfg in tree_configs)
+    max_rounds = max(sum(values(remaining_targets)) * 60, 1)
+    added = Dict(cfg.name => 0 for cfg in tree_configs)
+    initial_terminals = Dict(cfg.name => trees[cfg.name].n_terminals for cfg in tree_configs)
+    initial_segments = Dict(cfg.name => trees[cfg.name].segments.n for cfg in tree_configs)
+
+    round = 0
+    while round < max_rounds
+        round += 1
+        all_done = true
+
+        for cfg in tree_configs
+            remaining_targets[cfg.name] <= 0 && continue
+            all_done = false
+
+            tree = trees[cfg.name]
+            buf = buffers[cfg.name]
+            n = tree.segments.n
+
+            if n - last_rebuild[cfg.name] >= grid_rebuild_interval
+                cs = _grid_cell_size(domain_size, n)
+                grids[cfg.name] = build_grid(tree.segments, n, domain, cs)
+                last_rebuild[cfg.name] = n
+            end
+            grid = grids[cfg.name]
+
+            d_thresh = domain_size / (10.0 * (n + 1)^(1.0 / 3.0))
+            pt = sample_in_territory(domain, tmap, cfg.name, rng)
+            pt === nothing && continue
+            tx, ty, tz = pt
+
+            collision = false
+            for (other_name, other_tree) in trees
+                other_name == cfg.name && continue
+                if check_inter_tree_collision((tx, ty, tz), other_tree, d_thresh)
+                    collision = true
+                    break
+                end
+            end
+            collision && continue
+
+            K = min(n, 20)
+            search_radius = d_thresh * 5.0
+            nearest = _find_nearest_via_grid(grid, tree.segments, buf.distances, tx, ty, tz, search_radius, K, n)
+
+            seg_idx = 0
+            t_opt = 0.5
+            best_cost = Inf
+            found = false
+
+            for ki in eachindex(nearest)
+                ci = nearest[ki]
+
+                ti, costi = optimize_bifurcation_point(
+                    tree.segments.proximal_x[ci], tree.segments.proximal_y[ci], tree.segments.proximal_z[ci],
+                    tree.segments.distal_x[ci], tree.segments.distal_y[ci], tree.segments.distal_z[ci],
+                    tree.segments.radius[ci], tx, ty, tz, gamma)
+
+                costi >= best_cost && continue
+
+                bx = tree.segments.proximal_x[ci] + ti * (tree.segments.distal_x[ci] - tree.segments.proximal_x[ci])
+                by = tree.segments.proximal_y[ci] + ti * (tree.segments.distal_y[ci] - tree.segments.proximal_y[ci])
+                bz = tree.segments.proximal_z[ci] + ti * (tree.segments.distal_z[ci] - tree.segments.proximal_z[ci])
+
+                parent_r = tree.segments.radius[ci]
+                intersect_dist = max(parent_r * 2.0, d_thresh * 0.01)
+                check_intersections!(buf.intersect, tree.segments, bx, by, bz, tx, ty, tz, intersect_dist, n)
+                topo = tree.topology
+                _clear_local_intersection_neighborhood!(buf.intersect, topo, ci)
+
+                has_any_intersection(buf.intersect, n) && continue
+                check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz)) && continue
+
+                best_cost = costi
+                seg_idx = ci
+                t_opt = ti
+                found = true
+            end
+
+            !found && continue
+
+            n_before = tree.segments.n
+            cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radius)
+
+            if kassab
+                parent_radius = tree.segments.radius[seg_idx]
+                asymmetry = sample_asymmetry(params, rng)
+                r_large, r_small = compute_daughter_radii(parent_radius, asymmetry, gamma)
+                tree.segments.radius[cont_id] = r_large
+                tree.segments.radius[new_id] = r_small
+            end
+
+            update_radii!(tree, gamma)
+
+            _insert_segment_to_grid!(grid, tree.segments, seg_idx)
+            for new_seg_idx in (n_before + 1):tree.segments.n
+                _insert_segment_to_grid!(grid, tree.segments, new_seg_idx)
+            end
+
+            added[cfg.name] += 1
+            remaining_targets[cfg.name] -= 1
+        end
+
+        all_done && break
+    end
+
+    if verbose
+        for cfg in tree_configs
+            tree = trees[cfg.name]
+            terminal_delta = tree.n_terminals - initial_terminals[cfg.name]
+            segment_delta = tree.segments.n - initial_segments[cfg.name]
+            println(
+                "  $(cfg.name): +$(terminal_delta) terminals, +$(segment_delta) segments ",
+                "(successful insertions=$(added[cfg.name])) -> total $(tree.n_terminals) terminals, $(tree.segments.n) segments",
+            )
+        end
+    end
+
+    return CoronaryForest(trees, tmap, params)
 end
 
 """
@@ -559,19 +803,8 @@ function generate_coronary_forest(
                 intersect_dist = max(parent_r * 2.0, d_thresh * 0.01)
                 check_intersections!(buf.intersect, tree.segments, bx, by, bz, tx, ty, tz, intersect_dist, n)
 
-                # Exclude topological neighbors
-                buf.intersect[ci] = false
                 topo = tree.topology
-                pp = topo.parent_id[ci]
-                if pp > 0
-                    buf.intersect[pp] = false
-                    for c in (topo.child1_id[pp], topo.child2_id[pp], topo.child3_id[pp])
-                        c > 0 && (buf.intersect[c] = false)
-                    end
-                end
-                for c in (topo.child1_id[ci], topo.child2_id[ci], topo.child3_id[ci])
-                    c > 0 && (buf.intersect[c] = false)
-                end
+                _clear_local_intersection_neighborhood!(buf.intersect, topo, ci)
 
                 has_any_intersection(buf.intersect, n) && continue
                 check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz)) && continue
@@ -697,6 +930,50 @@ function _project_tree_to_domain!(tree::VascularTree, domain::EllipsoidShellDoma
     end
 end
 
+function _project_tree_to_domain!(tree::VascularTree, domain::AbstractDomain)
+    seg = tree.segments
+    topo = tree.topology
+
+    for _pass in 1:3
+        n_fixed = 0
+        for i in 1:seg.n
+            pp = (seg.proximal_x[i], seg.proximal_y[i], seg.proximal_z[i])
+            if !in_domain(domain, pp)
+                proj = project_to_domain(domain, pp)
+                seg.proximal_x[i] = proj[1]
+                seg.proximal_y[i] = proj[2]
+                seg.proximal_z[i] = proj[3]
+                pp = proj
+                n_fixed += 1
+            end
+
+            dp = (seg.distal_x[i], seg.distal_y[i], seg.distal_z[i])
+            if !in_domain(domain, dp)
+                proj = project_to_domain(domain, dp)
+                seg.distal_x[i] = proj[1]
+                seg.distal_y[i] = proj[2]
+                seg.distal_z[i] = proj[3]
+                n_fixed += 1
+
+                for cid in (topo.child1_id[i], topo.child2_id[i], topo.child3_id[i])
+                    if cid > 0
+                        seg.proximal_x[cid] = proj[1]
+                        seg.proximal_y[cid] = proj[2]
+                        seg.proximal_z[cid] = proj[3]
+                    end
+                end
+            end
+
+            ex = seg.distal_x[i] - seg.proximal_x[i]
+            ey = seg.distal_y[i] - seg.proximal_y[i]
+            ez = seg.distal_z[i] - seg.proximal_z[i]
+            seg.seg_length[i] = sqrt(ex * ex + ey * ey + ez * ez)
+        end
+        n_fixed == 0 && break
+    end
+    return tree
+end
+
 """
     _effective_domain_volume(domain) -> Float64
 
@@ -719,6 +996,8 @@ function _effective_domain_volume(domain::AbstractDomain)
         dz = domain.max_corner[3] - domain.min_corner[3]
         return dx * dy * dz
     elseif domain isa CSVVolumeDomain
+        return domain.volume
+    elseif domain isa CSVShellDomain
         return domain.volume
     end
     s = _domain_size(domain)
@@ -945,19 +1224,8 @@ function generate_kassab_coronary(
                 parent_r = tree.segments.radius[ci]
                 intersect_dist = max(parent_r * 2.0, d_thresh * 0.01)
                 check_intersections!(buf.intersect, tree.segments, bx, by, bz, tx, ty, tz, intersect_dist, n)
-
-                buf.intersect[ci] = false
                 topo = tree.topology
-                pp = topo.parent_id[ci]
-                if pp > 0
-                    buf.intersect[pp] = false
-                    for c in (topo.child1_id[pp], topo.child2_id[pp], topo.child3_id[pp])
-                        c > 0 && (buf.intersect[c] = false)
-                    end
-                end
-                for c in (topo.child1_id[ci], topo.child2_id[ci], topo.child3_id[ci])
-                    c > 0 && (buf.intersect[c] = false)
-                end
+                _clear_local_intersection_neighborhood!(buf.intersect, topo, ci)
 
                 has_any_intersection(buf.intersect, n) && continue
                 check_domain_crossing(domain, (bx, by, bz), (tx, ty, tz)) && continue

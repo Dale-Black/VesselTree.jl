@@ -242,6 +242,34 @@ function _sample_element_diameter(order::Int, params::MorphometricParams, rng::A
     return mean_um
 end
 
+function _sample_cm_daughter_order(parent_order::Int, params::MorphometricParams, rng::AbstractRNG)
+    CM = params.connectivity_matrix
+    n_orders = params.n_orders
+    daughter_orders = Int[]
+    weights = Float64[]
+    for m in 0:(parent_order - 1)
+        if m + 1 <= n_orders && parent_order + 1 <= n_orders
+            lambda = CM[m + 1, parent_order + 1]
+            lambda > 0.0 || continue
+            push!(daughter_orders, m)
+            push!(weights, lambda)
+        end
+    end
+
+    isempty(daughter_orders) && return max(parent_order - 1, 0)
+
+    total = sum(weights)
+    draw = rand(rng) * total
+    accum = 0.0
+    for (idx, w) in enumerate(weights)
+        accum += w
+        if draw <= accum
+            return daughter_orders[idx]
+        end
+    end
+    return daughter_orders[end]
+end
+
 """
     subdivide_terminals!(tree, params; rng, max_order)
 
@@ -259,6 +287,7 @@ function subdivide_terminals!(
     rng::AbstractRNG=Random.default_rng(),
     max_order::Int=params.n_orders - 1,
     domain::Union{AbstractDomain, Nothing}=nothing,
+    enforce_full_cutoff::Bool=false,
 )
     assign_strahler_orders!(tree, params)
 
@@ -277,7 +306,15 @@ function subdivide_terminals!(
     end
 
     for k in 1:length(term_indices)
-        _subdivide_recursive!(tree, term_indices[k], term_orders[k], params, rng, domain)
+        _subdivide_recursive!(
+            tree,
+            term_indices[k],
+            term_orders[k],
+            params,
+            rng,
+            domain;
+            enforce_full_cutoff=enforce_full_cutoff,
+        )
     end
 
     return tree
@@ -301,6 +338,8 @@ function _subdivide_recursive!(
     params::MorphometricParams,
     rng::AbstractRNG,
     domain::Union{AbstractDomain, Nothing}=nothing,
+    ;
+    enforce_full_cutoff::Bool=false,
 )
     parent_order <= 0 && return
 
@@ -334,7 +373,13 @@ function _subdivide_recursive!(
         end
     end
 
-    isempty(daughters) && return
+    if enforce_full_cutoff && parent_order > 0
+        while length(daughters) < 2
+            push!(daughters, _sample_cm_daughter_order(parent_order, params, rng))
+        end
+    elseif isempty(daughters)
+        return
+    end
     # Sort daughters by order ascending — peel off smallest first (most asymmetric)
     sort!(daughters)
 
@@ -418,7 +463,7 @@ function _subdivide_recursive!(
 
         # Recursively subdivide the daughter
         if d_order > 0
-            _subdivide_recursive!(tree, Int(d_id), d_order, params, rng, domain)
+            _subdivide_recursive!(tree, Int(d_id), d_order, params, rng, domain; enforce_full_cutoff=enforce_full_cutoff)
         end
 
         # Move to continuation for next bifurcation in the chain
@@ -476,9 +521,15 @@ function _subdivide_recursive!(
         tree.topology.strahler_order[d2_id] = Int32(d2_order)
 
         # Recursively subdivide both daughters
-        d1_order > 0 && _subdivide_recursive!(tree, Int(d1_id), d1_order, params, rng, domain)
-        d2_order > 0 && _subdivide_recursive!(tree, Int(d2_id), d2_order, params, rng, domain)
+        d1_order > 0 && _subdivide_recursive!(tree, Int(d1_id), d1_order, params, rng, domain; enforce_full_cutoff=enforce_full_cutoff)
+        d2_order > 0 && _subdivide_recursive!(tree, Int(d2_id), d2_order, params, rng, domain; enforce_full_cutoff=enforce_full_cutoff)
     end
-    # For N=1: handled by the internal loop above (1 daughter + continuation)
+    # For N=1: the internal loop above creates one daughter plus a continuation
+    # segment that is still part of the same parent-order element. Continue
+    # subdividing that continuation so the chain does not terminate prematurely
+    # at a high-order stub.
+    if n_daughters == 1 && parent_order > 0
+        _subdivide_recursive!(tree, current_parent, parent_order, params, rng, domain; enforce_full_cutoff=enforce_full_cutoff)
+    end
     # For N=0: handled by the isempty check above
 end

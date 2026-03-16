@@ -147,6 +147,12 @@ function _domain_size(domain::AbstractDomain)
             domain.max_corner[2] - domain.min_corner[2],
             domain.max_corner[3] - domain.min_corner[3],
         )
+    elseif domain isa CSVShellDomain
+        return max(
+            domain.max_corner[1] - domain.min_corner[1],
+            domain.max_corner[2] - domain.min_corner[2],
+            domain.max_corner[3] - domain.min_corner[3],
+        )
     end
     return 1.0
 end

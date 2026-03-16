@@ -1,6 +1,7 @@
 # Perfusion domain types for vascular tree generation
 
 using DelimitedFiles
+using Random
 
 """
     AbstractDomain
@@ -239,6 +240,25 @@ end
 
 domain_bounds(d::CSVVolumeDomain) = (d.min_corner, d.max_corner)
 
+struct CSVShellDomain <: AbstractDomain
+    outer_surface_points::Matrix{Float64}
+    outer_surface_normals::Matrix{Float64}
+    cavity_surface_points::Vector{Matrix{Float64}}
+    cavity_surface_normals::Vector{Matrix{Float64}}
+    interior_points::Matrix{Float64}
+    center::NTuple{3, Float64}
+    min_corner::NTuple{3, Float64}
+    max_corner::NTuple{3, Float64}
+    volume::Float64
+    characteristic_length::Float64
+    length_scale::Float64
+    outer_query_grid::PointCloudGrid
+    cavity_query_grids::Vector{PointCloudGrid}
+    cavity_names::Vector{String}
+end
+
+domain_bounds(d::CSVShellDomain) = (d.min_corner, d.max_corner)
+
 function _read_xyz_csv(path::AbstractString)
     raw = readdlm(path, ',', Float64)
     mat = raw isa Matrix ? Matrix{Float64}(raw) : reshape(Float64.(raw), 1, :)
@@ -262,6 +282,16 @@ function _normalize_rows!(mat::Matrix{Float64})
         mat[i, 3] = nz / nrm
     end
     return mat
+end
+
+function _copy_and_prepare_surface(points::Matrix{Float64}, normals::Matrix{Float64}; coordinate_scale::Float64=1.0)
+    size(points, 1) == size(normals, 1) ||
+        error("Point/normal row count mismatch: $(size(points, 1)) vs $(size(normals, 1)).")
+    coordinate_scale > 0.0 || error("coordinate_scale must be positive.")
+    prepared_points = copy(points)
+    prepared_normals = _normalize_rows!(copy(normals))
+    prepared_points .*= coordinate_scale
+    return prepared_points, prepared_normals
 end
 
 function _point_grid_index(grid::PointCloudGrid, x::Float64, y::Float64, z::Float64)
@@ -369,6 +399,170 @@ function _nearest_surface_info(domain::CSVVolumeDomain, point)
     return _nearest_surface_info(domain.surface_points, domain.surface_normals, domain.query_grid, point)
 end
 
+function _nearest_outer_surface_info(domain::CSVShellDomain, point)
+    return _nearest_surface_info(
+        domain.outer_surface_points,
+        domain.outer_surface_normals,
+        domain.outer_query_grid,
+        point,
+    )
+end
+
+function _nearest_cavity_surface_info(domain::CSVShellDomain, cavity_idx::Int, point)
+    return _nearest_surface_info(
+        domain.cavity_surface_points[cavity_idx],
+        domain.cavity_surface_normals[cavity_idx],
+        domain.cavity_query_grids[cavity_idx],
+        point,
+    )
+end
+
+function _shell_signed_distance(domain::CSVShellDomain, point)
+    _, outer_sd = _nearest_outer_surface_info(domain, point)
+    worst_sd = outer_sd
+    worst_cavity_idx = 0
+    worst_cavity_sd = -Inf
+
+    for cavity_idx in eachindex(domain.cavity_surface_points)
+        _, cavity_sd = _nearest_cavity_surface_info(domain, cavity_idx, point)
+        cavity_violation = -cavity_sd
+        if cavity_violation > worst_sd
+            worst_sd = cavity_violation
+        end
+        if cavity_violation > worst_cavity_sd
+            worst_cavity_sd = cavity_violation
+            worst_cavity_idx = cavity_idx
+        end
+    end
+
+    return worst_sd, outer_sd, worst_cavity_idx, worst_cavity_sd
+end
+
+function _shell_domain_from_matrices(
+    outer_surface_points::Matrix{Float64},
+    outer_surface_normals::Matrix{Float64},
+    cavity_surface_points::Vector{Matrix{Float64}},
+    cavity_surface_normals::Vector{Matrix{Float64}};
+    cavity_names::Vector{String}=String[],
+    rng::AbstractRNG=Random.default_rng(),
+    target_interior::Int=120_000,
+    max_candidates::Int=400_000,
+    batch_size::Int=8192,
+    coordinate_scale::Float64=1.0,
+)
+    outer_points, outer_normals = _copy_and_prepare_surface(
+        outer_surface_points,
+        outer_surface_normals;
+        coordinate_scale=coordinate_scale,
+    )
+
+    length(cavity_surface_points) == length(cavity_surface_normals) ||
+        error("Cavity point/normal list length mismatch.")
+
+    cavity_points_scaled = Matrix{Float64}[]
+    cavity_normals_scaled = Matrix{Float64}[]
+    for idx in eachindex(cavity_surface_points)
+        pts, nrms = _copy_and_prepare_surface(
+            cavity_surface_points[idx],
+            cavity_surface_normals[idx];
+            coordinate_scale=coordinate_scale,
+        )
+        push!(cavity_points_scaled, pts)
+        push!(cavity_normals_scaled, nrms)
+    end
+
+    n = size(outer_points, 1)
+    center = (
+        sum(@view outer_points[:, 1]) / n,
+        sum(@view outer_points[:, 2]) / n,
+        sum(@view outer_points[:, 3]) / n,
+    )
+    lo = (
+        minimum(@view outer_points[:, 1]),
+        minimum(@view outer_points[:, 2]),
+        minimum(@view outer_points[:, 3]),
+    )
+    hi = (
+        maximum(@view outer_points[:, 1]),
+        maximum(@view outer_points[:, 2]),
+        maximum(@view outer_points[:, 3]),
+    )
+
+    outer_grid = _build_point_grid(outer_points, lo, hi)
+    cavity_grids = [_build_point_grid(pts, lo, hi) for pts in cavity_points_scaled]
+
+    keep = Matrix{Float64}(undef, target_interior, 3)
+    kept = 0
+    draws = 0
+
+    while kept < target_interior && draws < max_candidates
+        n_batch = min(batch_size, max_candidates - draws)
+        for _ in 1:n_batch
+            px = lo[1] + rand(rng) * (hi[1] - lo[1])
+            py = lo[2] + rand(rng) * (hi[2] - lo[2])
+            pz = lo[3] + rand(rng) * (hi[3] - lo[3])
+            draws += 1
+
+            outer_sd = begin
+                _, sd = _nearest_surface_info(outer_points, outer_normals, outer_grid, (px, py, pz))
+                sd
+            end
+            inside = outer_sd <= 0.0
+            if inside
+                for cavity_idx in eachindex(cavity_points_scaled)
+                    _, cavity_sd = _nearest_surface_info(
+                        cavity_points_scaled[cavity_idx],
+                        cavity_normals_scaled[cavity_idx],
+                        cavity_grids[cavity_idx],
+                        (px, py, pz),
+                    )
+                    if cavity_sd < 0.0
+                        inside = false
+                        break
+                    end
+                end
+            end
+
+            if inside
+                kept += 1
+                keep[kept, 1] = px
+                keep[kept, 2] = py
+                keep[kept, 3] = pz
+                kept >= target_interior && break
+            end
+            draws >= max_candidates && break
+        end
+    end
+
+    kept > 0 || error("Failed to sample interior points for shell domain.")
+    interior_points = copy(keep[1:kept, :])
+
+    bbox_dx = hi[1] - lo[1]
+    bbox_dy = hi[2] - lo[2]
+    bbox_dz = hi[3] - lo[3]
+    bbox_vol = bbox_dx * bbox_dy * bbox_dz
+    volume = bbox_vol * kept / max(draws, 1)
+    characteristic_length = cbrt(max(volume, 1e-12))
+    actual_cavity_names = isempty(cavity_names) ? ["cavity_$i" for i in eachindex(cavity_points_scaled)] : cavity_names
+
+    return CSVShellDomain(
+        outer_points,
+        outer_normals,
+        cavity_points_scaled,
+        cavity_normals_scaled,
+        interior_points,
+        center,
+        lo,
+        hi,
+        volume,
+        characteristic_length,
+        coordinate_scale,
+        outer_grid,
+        cavity_grids,
+        String.(actual_cavity_names),
+    )
+end
+
 function csv_volume_domain(
     points_csv::AbstractString,
     normals_csv::AbstractString;
@@ -457,6 +651,28 @@ function csv_volume_domain(
     )
 end
 
+function csv_shell_domain(
+    outer_points_csv::AbstractString,
+    outer_normals_csv::AbstractString,
+    cavity_points_csvs::Vector{String},
+    cavity_normals_csvs::Vector{String};
+    cavity_names::Vector{String}=String[],
+    kwargs...,
+)
+    outer_points = _read_xyz_csv(outer_points_csv)
+    outer_normals = _read_xyz_csv(outer_normals_csv)
+    cavity_points = [_read_xyz_csv(path) for path in cavity_points_csvs]
+    cavity_normals = [_read_xyz_csv(path) for path in cavity_normals_csvs]
+    return _shell_domain_from_matrices(
+        outer_points,
+        outer_normals,
+        cavity_points,
+        cavity_normals;
+        cavity_names=cavity_names,
+        kwargs...,
+    )
+end
+
 function default_coronary_volume_domain(; kwargs...)
     repo_root = dirname(@__DIR__)
     return csv_volume_domain(
@@ -471,12 +687,27 @@ function in_domain(d::CSVVolumeDomain, point)
     return signed_dist <= 0.0
 end
 
+function in_domain(d::CSVShellDomain, point)
+    signed_dist, _, _, _ = _shell_signed_distance(d, point)
+    return signed_dist <= 0.0
+end
+
 function signed_distance(d::CSVVolumeDomain, point)
     _, signed_dist = _nearest_surface_info(d, point)
     return signed_dist
 end
 
+function signed_distance(d::CSVShellDomain, point)
+    signed_dist, _, _, _ = _shell_signed_distance(d, point)
+    return signed_dist
+end
+
 function sample_point(d::CSVVolumeDomain, rng::AbstractRNG)
+    idx = rand(rng, axes(d.interior_points, 1))
+    return _row_tuple(d.interior_points, idx)
+end
+
+function sample_point(d::CSVShellDomain, rng::AbstractRNG)
     idx = rand(rng, axes(d.interior_points, 1))
     return _row_tuple(d.interior_points, idx)
 end
@@ -570,6 +801,30 @@ function project_to_domain(d::CSVVolumeDomain, point)
     end
 
     return proj
+end
+
+function project_to_domain(d::CSVShellDomain, point)
+    shell_sd, outer_sd, worst_cavity_idx, worst_cavity_sd = _shell_signed_distance(d, point)
+    shell_sd <= 0.0 && return point
+
+    if outer_sd >= worst_cavity_sd
+        idx, signed_dist = _nearest_outer_surface_info(d, point)
+        px, py, pz = point
+        return (
+            px - signed_dist * d.outer_surface_normals[idx, 1],
+            py - signed_dist * d.outer_surface_normals[idx, 2],
+            pz - signed_dist * d.outer_surface_normals[idx, 3],
+        )
+    end
+
+    idx, cavity_sd = _nearest_cavity_surface_info(d, worst_cavity_idx, point)
+    px, py, pz = point
+    push_out = -cavity_sd + 1e-6
+    return (
+        px + push_out * d.cavity_surface_normals[worst_cavity_idx][idx, 1],
+        py + push_out * d.cavity_surface_normals[worst_cavity_idx][idx, 2],
+        pz + push_out * d.cavity_surface_normals[worst_cavity_idx][idx, 3],
+    )
 end
 
 """
