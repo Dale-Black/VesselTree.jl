@@ -80,6 +80,85 @@ function _inside_voxel_centers(
     return inside
 end
 
+
+function _cleanup_territory_islands!(
+    tmap::TerritoryMap,
+    domain::AbstractDomain;
+    min_component_voxels::Int=16,
+)
+    min_component_voxels <= 1 && return tmap
+    nx, ny, nz = tmap.dims
+    inside_lookup = falses(nx, ny, nz)
+    for iz in 1:nz, iy in 1:ny, ix in 1:nx
+        x = tmap.origin[1] + (ix - 0.5) * tmap.cell_size
+        y = tmap.origin[2] + (iy - 0.5) * tmap.cell_size
+        z = tmap.origin[3] + (iz - 0.5) * tmap.cell_size
+        inside_lookup[ix, iy, iz] = in_domain(domain, (x, y, z))
+    end
+
+    visited = falses(nx, ny, nz)
+    neigh = ((1,0,0), (-1,0,0), (0,1,0), (0,-1,0), (0,0,1), (0,0,-1))
+
+    for iz in 1:nz, iy in 1:ny, ix in 1:nx
+        inside_lookup[ix, iy, iz] || continue
+        visited[ix, iy, iz] && continue
+        flat_idx = ix + (iy - 1) * nx + (iz - 1) * nx * ny
+        owner = tmap.cells[flat_idx]
+        stack = [(ix, iy, iz)]
+        visited[ix, iy, iz] = true
+        component = Tuple{Int,Int,Int}[]
+        push!(component, (ix, iy, iz))
+
+        while !isempty(stack)
+            cx, cy, cz = pop!(stack)
+            for (dx, dy, dz) in neigh
+                nx2, ny2, nz2 = cx + dx, cy + dy, cz + dz
+                1 <= nx2 <= nx && 1 <= ny2 <= ny && 1 <= nz2 <= nz || continue
+                inside_lookup[nx2, ny2, nz2] || continue
+                visited[nx2, ny2, nz2] && continue
+                nflat = nx2 + (ny2 - 1) * nx + (nz2 - 1) * nx * ny
+                tmap.cells[nflat] == owner || continue
+                visited[nx2, ny2, nz2] = true
+                push!(stack, (nx2, ny2, nz2))
+                push!(component, (nx2, ny2, nz2))
+            end
+        end
+
+        length(component) >= min_component_voxels && continue
+
+        neighbor_counts = Dict{Int, Int}()
+        for (cx, cy, cz) in component
+            for (dx, dy, dz) in neigh
+                nx2, ny2, nz2 = cx + dx, cy + dy, cz + dz
+                1 <= nx2 <= nx && 1 <= ny2 <= ny && 1 <= nz2 <= nz || continue
+                inside_lookup[nx2, ny2, nz2] || continue
+                nflat = nx2 + (ny2 - 1) * nx + (nz2 - 1) * nx * ny
+                nowner = tmap.cells[nflat]
+                nowner == owner && continue
+                neighbor_counts[nowner] = get(neighbor_counts, nowner, 0) + 1
+            end
+        end
+
+        isempty(neighbor_counts) && continue
+        replacement = owner
+        best_count = -1
+        for (candidate, count) in neighbor_counts
+            if count > best_count
+                replacement = candidate
+                best_count = count
+            end
+        end
+
+        replacement == owner && continue
+        for (cx, cy, cz) in component
+            cflat = cx + (cy - 1) * nx + (cz - 1) * nx * ny
+            tmap.cells[cflat] = replacement
+        end
+    end
+
+    return tmap
+end
+
 function _territory_reference_points(
     domain::AbstractDomain,
     configs::Vector{TreeConfig},
@@ -143,7 +222,135 @@ distance partition. The weights are iteratively adjusted so the realized
 in-domain voxel fractions approximate each tree's configured
 `territory_fraction`.
 """
-function initialize_territories(domain::AbstractDomain, configs::Vector{TreeConfig})
+@inline function _tree_distance_to_point(
+    tree::VascularTree,
+    point::NTuple{3, Float64},
+    buffer::Vector{Float64},
+)
+    n = tree.segments.n
+    n == 0 && return Inf
+    compute_all_distances!(buffer, tree.segments, point[1], point[2], point[3], n)
+    return AK.minimum(@view buffer[1:n])
+end
+
+function _territory_owner_by_tree_distance(
+    tree_order::AbstractVector{<:VascularTree},
+    buffers::Vector{Vector{Float64}},
+    biases::Vector{Float64},
+    point::NTuple{3, Float64},
+)
+    best_idx = 1
+    best_score = Inf
+    for i in eachindex(tree_order)
+        d = _tree_distance_to_point(tree_order[i], point, buffers[i])
+        score = d - biases[i]
+        if score < best_score
+            best_score = score
+            best_idx = i
+        end
+    end
+    return best_idx
+end
+
+function _territory_owner_blended(
+    refs::Vector{NTuple{3, Float64}},
+    tree_order::AbstractVector{<:VascularTree},
+    buffers::Vector{Vector{Float64}},
+    biases::Vector{Float64},
+    point::NTuple{3, Float64},
+    tree_distance_weight::Float64,
+)
+    tree_distance_weight <= 0.0 && return _territory_owner(refs, biases, point)
+    tree_distance_weight >= 1.0 && return _territory_owner_by_tree_distance(tree_order, buffers, biases, point)
+
+    px, py, pz = point
+    best_idx = 1
+    best_score = Inf
+    for i in eachindex(refs)
+        ref = refs[i]
+        dx = px - ref[1]
+        dy = py - ref[2]
+        dz = pz - ref[3]
+        ref_dist = sqrt(dx^2 + dy^2 + dz^2)
+        tree_dist = _tree_distance_to_point(tree_order[i], point, buffers[i])
+        score = (1.0 - tree_distance_weight) * ref_dist + tree_distance_weight * tree_dist - biases[i]
+        if score < best_score
+            best_score = score
+            best_idx = i
+        end
+    end
+    return best_idx
+end
+
+function initialize_territories(
+    domain::AbstractDomain,
+    configs::Vector{TreeConfig},
+    trees::Dict{String, VascularTree};
+    tree_distance_weight::Float64=1.0,
+    cleanup_islands::Bool=false,
+    min_component_voxels::Int=16,
+)
+    lo, hi = domain_bounds(domain)
+
+    extent = max(hi[1] - lo[1], hi[2] - lo[2], hi[3] - lo[3])
+    cell_size = extent / 20.0
+
+    nx = max(1, ceil(Int, (hi[1] - lo[1]) / cell_size))
+    ny = max(1, ceil(Int, (hi[2] - lo[2]) / cell_size))
+    nz = max(1, ceil(Int, (hi[3] - lo[3]) / cell_size))
+
+    tree_names = [cfg.name for cfg in configs]
+    tree_order = [trees[cfg.name] for cfg in configs]
+    distance_buffers = [zeros(max(tree.segments.n, 1)) for tree in tree_order]
+    n_cells = nx * ny * nz
+    cells = zeros(Int, n_cells)
+    inside = _inside_voxel_centers(domain, lo, cell_size, (nx, ny, nz))
+    anchor_length = 0.35 * extent
+    refs = _territory_reference_points(domain, configs, anchor_length)
+
+    biases = zeros(Float64, length(configs))
+    targets = _territory_targets(configs)
+    if !isempty(inside) && length(configs) > 1
+        counts = zeros(Int, length(configs))
+        gain = 0.35 * cell_size * max(nx, ny, nz)
+        for _ in 1:48
+            fill!(counts, 0)
+            for (_, point) in inside
+                owner = _territory_owner_blended(refs, tree_order, distance_buffers, biases, point, tree_distance_weight)
+                counts[owner] += 1
+            end
+
+            total_inside = sum(counts)
+            total_inside == 0 && break
+            actual = counts ./ total_inside
+            maximum(abs.(actual .- targets)) <= 0.02 && break
+
+            for i in eachindex(biases)
+                biases[i] += gain * (targets[i] - actual[i])
+            end
+
+            biases .-= sum(biases) / length(biases)
+        end
+    end
+
+    for iz in 1:nz
+        for iy in 1:ny
+            for ix in 1:nx
+                cx = lo[1] + (ix - 0.5) * cell_size
+                cy = lo[2] + (iy - 0.5) * cell_size
+                cz = lo[3] + (iz - 0.5) * cell_size
+                flat_idx = ix + (iy - 1) * nx + (iz - 1) * nx * ny
+                cells[flat_idx] = _territory_owner_blended(refs, tree_order, distance_buffers, biases, (cx, cy, cz), tree_distance_weight)
+            end
+        end
+    end
+
+    tmap = TerritoryMap(cell_size, lo, (nx, ny, nz), cells, tree_names)
+    cleanup_islands && _cleanup_territory_islands!(tmap, domain; min_component_voxels=min_component_voxels)
+    return tmap
+end
+
+function initialize_territories(domain::AbstractDomain, configs::Vector{TreeConfig}; cleanup_islands::Bool=false, min_component_voxels::Int=16)
     lo, hi = domain_bounds(domain)
 
     # Cell size: ~20 cells per dimension
@@ -199,7 +406,9 @@ function initialize_territories(domain::AbstractDomain, configs::Vector{TreeConf
         end
     end
 
-    return TerritoryMap(cell_size, lo, (nx, ny, nz), cells, tree_names)
+    tmap = TerritoryMap(cell_size, lo, (nx, ny, nz), cells, tree_names)
+    cleanup_islands && _cleanup_territory_islands!(tmap, domain; min_component_voxels=min_component_voxels)
+    return tmap
 end
 
 """
@@ -512,6 +721,74 @@ function CoronaryForest(trees, tmap, params::MorphometricParams)
     return CoronaryForest(trees, tmap, params, tp)
 end
 
+const _PHASE1_LENGTH_SIGMA = 2.5
+const _PHASE1_LENGTH_MIN_FACTOR = 1.5
+
+@inline function _phase1_terminal_length_limit_mm(
+    params::MorphometricParams,
+    handoff_order::Union{Nothing, Int},
+    parent_radius_mm::Float64;
+    sigma::Float64=_PHASE1_LENGTH_SIGMA,
+    min_factor::Float64=_PHASE1_LENGTH_MIN_FACTOR,
+)
+    parent_order = classify_order(params, parent_radius_mm * 2.0 * 1000.0)
+    if isnothing(handoff_order)
+        effective_order = max(parent_order, 0)
+    else
+        effective_order = max(max(parent_order, 0), handoff_order)
+    end
+    ho = clamp(effective_order, 0, params.n_orders - 1)
+    idx = ho + 1
+    mean_vec = !isempty(params.length_mean) ? params.length_mean : params.length_mean_elem
+    sd_vec = !isempty(params.length_sd) ? params.length_sd : params.length_sd_elem
+    mean_um = mean_vec[min(idx, length(mean_vec))]
+    sd_um = sd_vec[min(idx, length(sd_vec))]
+    max_um = max(mean_um + sigma * sd_um, mean_um * min_factor, params.vessel_cutoff_um * 4.0)
+    return max_um / 1000.0
+end
+
+@inline function _phase1_terminal_length_valid(
+    params::MorphometricParams,
+    handoff_order::Union{Nothing, Int},
+    parent_radius_mm::Float64,
+    bifurcation_point::NTuple{3, Float64},
+    terminal_point::NTuple{3, Float64};
+    sigma::Float64=_PHASE1_LENGTH_SIGMA,
+    min_factor::Float64=_PHASE1_LENGTH_MIN_FACTOR,
+)
+    max_len = _phase1_terminal_length_limit_mm(params, handoff_order, parent_radius_mm; sigma=sigma, min_factor=min_factor)
+    dx = terminal_point[1] - bifurcation_point[1]
+    dy = terminal_point[2] - bifurcation_point[2]
+    dz = terminal_point[3] - bifurcation_point[3]
+    return sqrt(dx^2 + dy^2 + dz^2) <= max_len
+end
+
+@inline function _phase1_continuation_radius_from_fixed_terminal(
+    parent_radius_mm::Float64,
+    terminal_radius_mm::Float64,
+    gamma::Float64,
+)
+    rem = parent_radius_mm^gamma - terminal_radius_mm^gamma
+    rem > 0.0 || return nothing
+    continuation_radius_mm = rem^(1.0 / gamma)
+    continuation_radius_mm > terminal_radius_mm || return nothing
+    return continuation_radius_mm
+end
+
+@inline function _apply_fixed_prefix_radii_blend!(
+    tree::VascularTree,
+    target_radii::AbstractVector{<:Real},
+    alpha::Float64,
+)
+    alpha <= 0.0 && return tree
+    seg = tree.segments
+    nfix = min(length(target_radii), seg.n)
+    for i in 1:nfix
+        seg.radius[i] = (1.0 - alpha) * seg.radius[i] + alpha * Float64(target_radii[i])
+    end
+    return tree
+end
+
 function continue_coronary_forest(
     domain::AbstractDomain,
     trees::Dict{String, VascularTree},
@@ -520,9 +797,21 @@ function continue_coronary_forest(
     rng::AbstractRNG=Random.default_rng(),
     verbose::Bool=false,
     kassab::Bool=true,
+    tree_params::Dict{String, MorphometricParams}=Dict{String, MorphometricParams}(),
+    handoff_order::Union{Nothing, Int}=nothing,
+    enforce_phase1_morphometry::Bool=false,
+    phase1_length_sigma::Float64=_PHASE1_LENGTH_SIGMA,
+    phase1_morphometry_by_tree::Dict{String, Bool}=Dict{String, Bool}(),
+    phase1_length_sigma_by_tree::Dict{String, Float64}=Dict{String, Float64}(),
+    phase1_use_fixed_handoff_terminal_radius::Bool=true,
+    fixed_prefix_radii::Dict{String, Vector{Float64}}=Dict{String, Vector{Float64}}(),
+    fixed_prefix_radius_blend_by_tree::Dict{String, Float64}=Dict{String, Float64}(),
+    use_tree_distance_territories::Bool=false,
+    territory_tree_distance_weight::Float64=0.0,
 )
-    gamma = params.gamma
-    tmap = initialize_territories(domain, tree_configs)
+    per_tree_params = Dict{String, MorphometricParams}(cfg.name => get(tree_params, cfg.name, params) for cfg in tree_configs)
+    tree_distance_weight = use_tree_distance_territories ? 1.0 : territory_tree_distance_weight
+    tmap = tree_distance_weight > 0.0 ? initialize_territories(domain, tree_configs, trees; tree_distance_weight=tree_distance_weight) : initialize_territories(domain, tree_configs)
     domain_size = _domain_size(domain)
 
     buffers = Dict{String, NamedTuple}()
@@ -544,7 +833,12 @@ function continue_coronary_forest(
         last_rebuild[cfg.name] = tree.segments.n
     end
 
-    terminal_radius = params.diameter_mean[1] / 2.0 / 1000.0
+    terminal_radii = Dict{String, Float64}()
+    for cfg in tree_configs
+        tp = per_tree_params[cfg.name]
+        ho = isnothing(handoff_order) ? 0 : min(handoff_order, tp.n_orders - 1)
+        terminal_radii[cfg.name] = tp.diameter_mean[ho + 1] / 2.0 / 1000.0
+    end
     remaining_targets = Dict(cfg.name => max(cfg.target_terminals - trees[cfg.name].n_terminals, 0) for cfg in tree_configs)
     max_rounds = max(sum(values(remaining_targets)) * 60, 1)
     added = Dict(cfg.name => 0 for cfg in tree_configs)
@@ -561,6 +855,11 @@ function continue_coronary_forest(
             all_done = false
 
             tree = trees[cfg.name]
+            tp = per_tree_params[cfg.name]
+            gamma = tp.gamma
+            ho = isnothing(handoff_order) ? nothing : min(handoff_order, tp.n_orders - 1)
+            gate_phase1 = get(phase1_morphometry_by_tree, cfg.name, enforce_phase1_morphometry)
+            sigma_phase1 = get(phase1_length_sigma_by_tree, cfg.name, phase1_length_sigma)
             buf = buffers[cfg.name]
             n = tree.segments.n
 
@@ -593,6 +892,8 @@ function continue_coronary_forest(
             seg_idx = 0
             t_opt = 0.5
             best_cost = Inf
+            best_cont_radius = NaN
+            best_term_radius = terminal_radii[cfg.name]
             found = false
 
             for ki in eachindex(nearest)
@@ -601,8 +902,10 @@ function continue_coronary_forest(
                 ti, costi = optimize_bifurcation_point(
                     tree.segments.proximal_x[ci], tree.segments.proximal_y[ci], tree.segments.proximal_z[ci],
                     tree.segments.distal_x[ci], tree.segments.distal_y[ci], tree.segments.distal_z[ci],
-                    tree.segments.radius[ci], tx, ty, tz, gamma)
+                    tree.segments.radius[ci], tx, ty, tz, gamma;
+                    t_min=_MIN_BIFURCATION_T, t_max=_MAX_BIFURCATION_T)
 
+                _bifurcation_geometry_valid(tree.segments, ci, ti, tx, ty, tz) || continue
                 costi >= best_cost && continue
 
                 bx = tree.segments.proximal_x[ci] + ti * (tree.segments.distal_x[ci] - tree.segments.proximal_x[ci])
@@ -610,6 +913,18 @@ function continue_coronary_forest(
                 bz = tree.segments.proximal_z[ci] + ti * (tree.segments.distal_z[ci] - tree.segments.proximal_z[ci])
 
                 parent_r = tree.segments.radius[ci]
+                if gate_phase1 && !_phase1_terminal_length_valid(tp, ho, parent_r, (bx, by, bz), (tx, ty, tz); sigma=sigma_phase1)
+                    continue
+                end
+
+                candidate_cont_radius = NaN
+                candidate_term_radius = terminal_radii[cfg.name]
+                if kassab && phase1_use_fixed_handoff_terminal_radius && !isnothing(ho)
+                    candidate_cont = _phase1_continuation_radius_from_fixed_terminal(parent_r, candidate_term_radius, gamma)
+                    isnothing(candidate_cont) && continue
+                    candidate_cont_radius = candidate_cont
+                end
+
                 intersect_dist = max(parent_r * 2.0, d_thresh * 0.01)
                 check_intersections!(buf.intersect, tree.segments, bx, by, bz, tx, ty, tz, intersect_dist, n)
                 topo = tree.topology
@@ -621,23 +936,34 @@ function continue_coronary_forest(
                 best_cost = costi
                 seg_idx = ci
                 t_opt = ti
+                best_cont_radius = candidate_cont_radius
+                best_term_radius = candidate_term_radius
                 found = true
             end
 
             !found && continue
 
             n_before = tree.segments.n
-            cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radius)
+            cont_id, new_id = add_bifurcation!(tree, seg_idx, t_opt, (tx, ty, tz), terminal_radii[cfg.name])
 
             if kassab
-                parent_radius = tree.segments.radius[seg_idx]
-                asymmetry = sample_asymmetry(params, rng)
-                r_large, r_small = compute_daughter_radii(parent_radius, asymmetry, gamma)
-                tree.segments.radius[cont_id] = r_large
-                tree.segments.radius[new_id] = r_small
+                if phase1_use_fixed_handoff_terminal_radius && !isnothing(ho)
+                    tree.segments.radius[cont_id] = best_cont_radius
+                    tree.segments.radius[new_id] = best_term_radius
+                else
+                    parent_radius = tree.segments.radius[seg_idx]
+                    asymmetry = sample_asymmetry(tp, rng)
+                    r_large, r_small = compute_daughter_radii(parent_radius, asymmetry, gamma)
+                    tree.segments.radius[cont_id] = r_large
+                    tree.segments.radius[new_id] = r_small
+                end
             end
 
             update_radii!(tree, gamma)
+            if haskey(fixed_prefix_radii, cfg.name)
+                alpha = get(fixed_prefix_radius_blend_by_tree, cfg.name, 0.0)
+                _apply_fixed_prefix_radii_blend!(tree, fixed_prefix_radii[cfg.name], alpha)
+            end
 
             _insert_segment_to_grid!(grid, tree.segments, seg_idx)
             for new_seg_idx in (n_before + 1):tree.segments.n
@@ -649,6 +975,15 @@ function continue_coronary_forest(
         end
 
         all_done && break
+    end
+
+    for cfg in tree_configs
+        name = cfg.name
+        haskey(fixed_prefix_radii, name) || continue
+        alpha = get(fixed_prefix_radius_blend_by_tree, name, 0.0)
+        alpha > 0.0 || continue
+        tree = trees[name]
+        _apply_fixed_prefix_radii_blend!(tree, fixed_prefix_radii[name], alpha)
     end
 
     if verbose
@@ -663,7 +998,7 @@ function continue_coronary_forest(
         end
     end
 
-    return CoronaryForest(trees, tmap, params)
+    return CoronaryForest(trees, tmap, params, per_tree_params)
 end
 
 """
@@ -791,8 +1126,10 @@ function generate_coronary_forest(
                 ti, costi = optimize_bifurcation_point(
                     tree.segments.proximal_x[ci], tree.segments.proximal_y[ci], tree.segments.proximal_z[ci],
                     tree.segments.distal_x[ci], tree.segments.distal_y[ci], tree.segments.distal_z[ci],
-                    tree.segments.radius[ci], tx, ty, tz, gamma)
+                    tree.segments.radius[ci], tx, ty, tz, gamma;
+                    t_min=_MIN_BIFURCATION_T, t_max=_MAX_BIFURCATION_T)
 
+                _bifurcation_geometry_valid(tree.segments, ci, ti, tx, ty, tz) || continue
                 costi >= best_cost && continue
 
                 bx = tree.segments.proximal_x[ci] + ti * (tree.segments.distal_x[ci] - tree.segments.proximal_x[ci])
@@ -1213,8 +1550,10 @@ function generate_kassab_coronary(
                 ti, costi = optimize_bifurcation_point(
                     tree.segments.proximal_x[ci], tree.segments.proximal_y[ci], tree.segments.proximal_z[ci],
                     tree.segments.distal_x[ci], tree.segments.distal_y[ci], tree.segments.distal_z[ci],
-                    tree.segments.radius[ci], tx, ty, tz, gamma)
+                    tree.segments.radius[ci], tx, ty, tz, gamma;
+                    t_min=_MIN_BIFURCATION_T, t_max=_MAX_BIFURCATION_T)
 
+                _bifurcation_geometry_valid(tree.segments, ci, ti, tx, ty, tz) || continue
                 costi >= best_cost && continue
 
                 bx = tree.segments.proximal_x[ci] + ti * (tree.segments.distal_x[ci] - tree.segments.proximal_x[ci])

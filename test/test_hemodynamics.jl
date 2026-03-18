@@ -17,9 +17,9 @@ using Random
 
         compute_resistances!(tree, mu)
 
-        # R = 8 * mu * L / (pi * r^4)
-        L = 10.0
-        r = 1.0
+        # R = 8 * mu * L / (pi * r^4), with mm -> m conversion
+        L = 10.0e-3
+        r = 1.0e-3
         R_expected = 8.0 * mu * L / (π * r^4)
         @test tree.segments.resistance[1] ≈ R_expected rtol = 1e-10
     end
@@ -32,8 +32,8 @@ using Random
 
         compute_resistances!(tree, mu)
 
-        R1 = 8.0 * mu * 5.0 / (π * 2.0^4)
-        R2 = 8.0 * mu * 5.0 / (π * 1.0^4)
+        R1 = 8.0 * mu * (5.0e-3) / (π * (2.0e-3)^4)
+        R2 = 8.0 * mu * (5.0e-3) / (π * (1.0e-3)^4)
         @test tree.segments.resistance[1] ≈ R1 rtol = 1e-10
         @test tree.segments.resistance[2] ≈ R2 rtol = 1e-10
 
@@ -61,7 +61,7 @@ using Random
         # Verify against scalar reference
         seg = tree.segments
         for i in 1:seg.n
-            R_ref = 8.0 * mu * seg.seg_length[i] / (π * seg.radius[i]^4)
+            R_ref = 8.0 * mu * (seg.seg_length[i] * 1e-3) / (π * (seg.radius[i] * 1e-3)^4)
             @test seg.resistance[i] ≈ R_ref rtol = 1e-10
         end
     end

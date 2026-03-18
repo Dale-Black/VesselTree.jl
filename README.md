@@ -177,6 +177,94 @@ These scripts:
 - compute vasodilated flow,
 - export Wenbo-format `.txt` trees when appropriate.
 
+### 9. Segment-level contrast transport
+
+Contrast transport is now available as a separate library layer on top of the
+tree hemodynamics.
+
+Main entry points:
+
+- `gamma_variate_input(...)`
+- `root_pulse_input(...)`
+- `simulate_contrast_transport(...)`
+- `simulate_forest_contrast(...)`
+- `segment_mass_mg(...)`
+
+Reference examples:
+
+- [xcat_contrast_transport.jl](/media/molloi-lab/2TB3/wenbo%20playground/flow%20simulation%20tree%20generation/v4/examples/xcat_contrast_transport.jl)
+- [xcat_contrast_viewer.jl](/media/molloi-lab/2TB3/wenbo%20playground/flow%20simulation%20tree%20generation/v4/examples/xcat_contrast_viewer.jl)
+
+Browser viewer notes:
+
+- the viewer exports a self-contained `index.html` into `v4/output/contrast_viewer/`,
+- it can also start a local HTTP server on `127.0.0.1:8008` by default,
+- the browser UI includes a draggable time slider plus Play/Pause controls,
+- the default viewer now shows every `0.05 s` time step,
+- the default sampling keeps more distal/small vessels visible,
+- gray lines show the vascular skeleton and colored markers show the segment-average iodine concentration over time,
+- the default color map is tuned for low-concentration visibility: near `0` is gray, around `3 mg/mL` is blue, and near the peak is red.
+
+Launch command:
+
+```bash
+JULIA_DEPOT_PATH=/tmp/julia_depot:/home/molloi-lab/.julia \
+/home/molloi-lab/.julia/juliaup/julia-1.10.10+0.x64.linux.gnu/bin/julia \
+  --project="v4" v4/examples/xcat_contrast_viewer.jl
+```
+
+Then open `http://127.0.0.1:8008/` in a browser.
+
+Current model assumptions:
+
+- each vascular segment is treated as a well-mixed control volume,
+- segment transit time is computed from `tau = V / Q`,
+- outlet concentration is the inlet concentration delayed by the segment transit time,
+- segment-average concentration is updated by a mass-balance ODE.
+
+This is a reduced transport model driven by the tree flow solution; it is not a
+full 3D Navier-Stokes simulation.
+
+### 10. Unified browser visualization
+
+The recommended browser viewer is now:
+
+- [xcat_unified_viewer.jl](/media/molloi-lab/2TB3/wenbo%20playground/flow%20simulation%20tree%20generation/v4/examples/xcat_unified_viewer.jl)
+
+This exports a single interactive `index.html` into `v4/output/unified_viewer/`
+and can also launch a local HTTP server on `127.0.0.1:8008`.
+
+The unified viewer combines these layers in one scene, each with a toggle:
+
+- domain surface
+- cardiac cavity points
+- sampled original XCAT vessel surfaces
+- imported fixed trunks
+- grown vascular tree
+- time-varying iodine concentration
+
+Viewer notes:
+
+- the iodine layer uses the same low-concentration-enhanced color map as the standalone contrast viewer,
+- the default time step is `0.05 s`,
+- hover on iodine points shows concentration, segment length, and segment diameter,
+- geometry layers are intentionally decimated to keep the browser responsive,
+- the page is intended for SSH workflows, so port-forwarding `8008` is usually required.
+
+Launch command:
+
+```bash
+JULIA_DEPOT_PATH=/tmp/julia_depot:/home/molloi-lab/.julia /home/molloi-lab/.julia/juliaup/julia-1.10.10+0.x64.linux.gnu/bin/julia   --project="v4" v4/examples/xcat_unified_viewer.jl
+```
+
+Then open `http://127.0.0.1:8008/` in a browser.
+
+The current XCAT example is wired to the latest visually validated coronary setup, including:
+
+- full-cutoff subdivision to `8 um`,
+- per-tree proximal fixed-prefix blending,
+- a single browser scene for geometry plus iodine flow inspection.
+
 ## Important Modeling Notes
 
 ### Pressure conditions
@@ -293,6 +381,7 @@ or reduce:
 - Large full-cutoff runs may need `apply_geometry=false` during exploration, then a separate geometry pass later if required.
 - Imported proximal coronary roots from XCAT still show evidence of cap-artifact bias at the aorta-facing end; this can depress inlet radius and remains an active source of flow mismatch during calibration.
 - Current XCAT calibration is closest for LAD/RCA; LCX remains the hardest branch to match to the published hyperemic target without pushing the other trees off target.
+- Contrast transport currently assumes a directed arterial tree without local recirculation or axial dispersion inside each segment; the first implementation tracks segment-average concentration rather than within-segment concentration profiles.
 
 ## Quick Start Commands
 
@@ -318,7 +407,9 @@ julia --project=. examples/xcat_kassab_full_cutoff.jl
 4. Run the continuation demo.
 5. Run the Kassab coronary example.
 6. Run the hemodynamics example.
-7. Use the calibration script when tuning full-cutoff targets.
-8. Only then move to the heaviest full-cutoff runs.
+7. Run the contrast-transport example if you need dynamic iodine concentration.
+8. Run the unified viewer example if you need one browser scene for domain, vessels, and iodine flow.
+9. Use the calibration script when tuning full-cutoff targets.
+10. Only then move to the heaviest full-cutoff runs.
 
 This sequence is much faster for debugging than jumping directly to the heaviest workflow.

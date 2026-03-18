@@ -260,6 +260,106 @@ function xcat_reverse_centerline(centerline::XCATCenterline)
     )
 end
 
+function xcat_centerline_length_mm(centerline::XCATCenterline)
+    length(centerline.centers) <= 1 && return 0.0
+    total = 0.0
+    for i in 1:(length(centerline.centers) - 1)
+        total += norm(centerline.centers[i + 1] - centerline.centers[i])
+    end
+    return total
+end
+
+function _xcat_centerline_cumulative_lengths(centerline::XCATCenterline)
+    n = length(centerline.centers)
+    s = zeros(Float64, n)
+    for i in 2:n
+        s[i] = s[i - 1] + norm(centerline.centers[i] - centerline.centers[i - 1])
+    end
+    return s
+end
+
+function _xcat_interpolate_centerline(
+    centerline::XCATCenterline,
+    cumulative_lengths::AbstractVector{<:Real},
+    target_s::Float64,
+)
+    n = length(centerline.centers)
+    n == 0 && error("Cannot interpolate empty centerline")
+    if target_s <= cumulative_lengths[1] + eps()
+        return first(centerline.centers), first(centerline.radii)
+    elseif target_s >= cumulative_lengths[end] - eps()
+        return last(centerline.centers), last(centerline.radii)
+    end
+
+    hi = searchsortedfirst(cumulative_lengths, target_s)
+    lo = max(hi - 1, 1)
+    s0 = cumulative_lengths[lo]
+    s1 = cumulative_lengths[hi]
+    if s1 <= s0 + eps()
+        return centerline.centers[hi], centerline.radii[hi]
+    end
+
+    t = (target_s - s0) / (s1 - s0)
+    p0 = centerline.centers[lo]
+    p1 = centerline.centers[hi]
+    r0 = centerline.radii[lo]
+    r1 = centerline.radii[hi]
+    point = (1.0 - t) * p0 + t * p1
+    radius = (1.0 - t) * r0 + t * r1
+    return point, radius
+end
+
+function xcat_resample_centerline(
+    centerline::XCATCenterline;
+    min_spacing_mm::Float64=0.75,
+    max_spacing_mm::Float64=1.5,
+    radius_spacing_factor::Float64=0.75,
+)
+    n = length(centerline.centers)
+    n <= 2 && return centerline
+
+    min_spacing_mm > 0 || error("min_spacing_mm must be positive")
+    max_spacing_mm >= min_spacing_mm || error("max_spacing_mm must be >= min_spacing_mm")
+    radius_spacing_factor > 0 || error("radius_spacing_factor must be positive")
+
+    cumulative_lengths = _xcat_centerline_cumulative_lengths(centerline)
+    total_length = cumulative_lengths[end]
+    total_length <= min_spacing_mm && return centerline
+
+    centers = SVector{3, Float64}[first(centerline.centers)]
+    radii = Float64[first(centerline.radii)]
+    s = 0.0
+
+    while true
+        local_radius = max(last(radii), 1e-6)
+        step = clamp(radius_spacing_factor * local_radius, min_spacing_mm, max_spacing_mm)
+        next_s = s + step
+        if next_s >= total_length - min_spacing_mm
+            break
+        end
+        point, radius = _xcat_interpolate_centerline(centerline, cumulative_lengths, next_s)
+        if norm(point - last(centers)) >= 0.5 * min_spacing_mm
+            push!(centers, point)
+            push!(radii, radius)
+            s = next_s
+        else
+            s += 0.5 * min_spacing_mm
+        end
+    end
+
+    endpoint = last(centerline.centers)
+    endradius = last(centerline.radii)
+    if norm(endpoint - last(centers)) < 0.5 * min_spacing_mm && length(centers) > 1
+        centers[end] = endpoint
+        radii[end] = endradius
+    else
+        push!(centers, endpoint)
+        push!(radii, endradius)
+    end
+
+    return XCATCenterline(centerline.name, centers, radii, centerline.axial_param)
+end
+
 function _xcat_slice_centerline_from(centerline::XCATCenterline, start_idx::Int)
     start_idx = clamp(start_idx, 1, length(centerline.centers))
     return XCATCenterline(
@@ -268,6 +368,32 @@ function _xcat_slice_centerline_from(centerline::XCATCenterline, start_idx::Int)
         centerline.radii[start_idx:end],
         centerline.axial_param,
     )
+end
+
+function _trim_root_cap_by_radius(
+    centerline::XCATCenterline;
+    min_radius_fraction::Float64=0.75,
+    max_trim_fraction::Float64=0.25,
+    min_points_keep::Int=4,
+)
+    n = length(centerline.centers)
+    n <= min_points_keep && return centerline
+    0.0 < min_radius_fraction <= 1.0 || error("min_radius_fraction must be in (0,1].")
+    0.0 <= max_trim_fraction <= 1.0 || error("max_trim_fraction must be in [0,1].")
+
+    max_radius = maximum(centerline.radii)
+    threshold = min_radius_fraction * max_radius
+    max_trim_idx = max(1, min(n - min_points_keep + 1, floor(Int, n * max_trim_fraction) + 1))
+
+    keep_idx = 1
+    for i in 1:max_trim_idx
+        if centerline.radii[i] >= threshold
+            keep_idx = i
+            break
+        end
+    end
+    keep_idx == 1 && return centerline
+    return _xcat_slice_centerline_from(centerline, keep_idx)
 end
 
 function xcat_sampled_surface_rows(
@@ -456,6 +582,35 @@ function _orient_child_to_parent(parent::XCATCenterline, child::XCATCenterline)
     return forward_dist <= reversed_dist ? child : reversed
 end
 
+function _snap_connection_to_parent_endpoint(
+    parent::XCATCenterline,
+    child::XCATCenterline,
+    parent_idx::Int,
+    child_idx::Int,
+    gap::Float64;
+    max_tail_points::Int=2,
+    max_extra_gap_mm::Float64=1.0,
+)
+    parent_tail_points = length(parent.centers) - parent_idx
+    parent_tail_points <= max_tail_points || return parent_idx, child_idx, gap
+
+    endpoint = last(parent.centers)
+    best_child_idx = child_idx
+    best_gap = Inf
+    for (j, q) in enumerate(child.centers)
+        d = norm(endpoint - q)
+        if d < best_gap
+            best_gap = d
+            best_child_idx = j
+        end
+    end
+
+    if best_gap <= gap + max_extra_gap_mm
+        return length(parent.centers), best_child_idx, best_gap
+    end
+    return parent_idx, child_idx, gap
+end
+
 function xcat_merge_centerline_chain(name::AbstractString, chain::Vector{XCATCenterline}; merge_tol_mm::Float64=2.0)
     isempty(chain) && error("Cannot merge empty centerline chain for $name")
     centers = copy(first(chain).centers)
@@ -507,6 +662,13 @@ end
 function _make_tree_connection(parent::XCATCenterline, child::XCATCenterline)
     oriented_child = _orient_child_to_parent(parent, child)
     parent_idx, child_idx, gap = _nearest_centerline_pair(parent, oriented_child)
+    parent_idx, child_idx, gap = _snap_connection_to_parent_endpoint(
+        parent,
+        oriented_child,
+        parent_idx,
+        child_idx,
+        gap,
+    )
     trimmed_child = _xcat_slice_centerline_from(oriented_child, child_idx)
     connection = XCATTreeConnection(parent.name, trimmed_child.name, parent_idx, 1, gap)
     return trimmed_child, connection

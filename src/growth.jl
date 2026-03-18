@@ -89,6 +89,58 @@ function add_bifurcation!(
     return Int(cont_id), Int(new_id)
 end
 
+const _MIN_BIFURCATION_T = 0.05
+const _MAX_BIFURCATION_T = 0.95
+const _MIN_SPLIT_LENGTH_MM = 0.05
+const _MIN_NEW_SEGMENT_LENGTH_MM = 0.05
+const _MIN_PARENT_BIFURCATION_LENGTH_MM = 0.2
+const _MIN_PARENT_LENGTH_TO_DIAMETER_RATIO = 0.25
+
+@inline function _bifurcation_geometry_valid(
+    segments::SegmentData,
+    seg_idx::Int,
+    bifurc_t::Float64,
+    tx::Float64, ty::Float64, tz::Float64;
+    min_t::Float64=_MIN_BIFURCATION_T,
+    max_t::Float64=_MAX_BIFURCATION_T,
+    min_split_length_mm::Float64=_MIN_SPLIT_LENGTH_MM,
+    min_new_segment_length_mm::Float64=_MIN_NEW_SEGMENT_LENGTH_MM,
+    min_parent_length_mm::Float64=_MIN_PARENT_BIFURCATION_LENGTH_MM,
+    min_parent_length_to_diameter_ratio::Float64=_MIN_PARENT_LENGTH_TO_DIAMETER_RATIO,
+)
+    (min_t < bifurc_t < max_t) || return false
+
+    parent_len = segments.seg_length[seg_idx]
+    parent_diameter_mm = 2.0 * segments.radius[seg_idx]
+    min_parent_len = max(min_parent_length_mm, min_parent_length_to_diameter_ratio * parent_diameter_mm)
+    parent_len >= min_parent_len || return false
+
+    min_piece_len = max(min_split_length_mm, 1e-6)
+
+    proximal_len = bifurc_t * parent_len
+    continuation_len = (1.0 - bifurc_t) * parent_len
+    proximal_len >= min_piece_len || return false
+    continuation_len >= min_piece_len || return false
+
+    px = segments.proximal_x[seg_idx]
+    py = segments.proximal_y[seg_idx]
+    pz = segments.proximal_z[seg_idx]
+    dx = segments.distal_x[seg_idx]
+    dy = segments.distal_y[seg_idx]
+    dz = segments.distal_z[seg_idx]
+    bx = px + bifurc_t * (dx - px)
+    by = py + bifurc_t * (dy - py)
+    bz = pz + bifurc_t * (dz - pz)
+
+    ex = tx - bx
+    ey = ty - by
+    ez = tz - bz
+    new_len = sqrt(ex * ex + ey * ey + ez * ez)
+    new_len >= min_new_segment_length_mm || return false
+
+    return true
+end
+
 """
     sample_terminal_candidate(domain, tree, params, distances_buf, rng; max_attempts=100)
 
@@ -323,8 +375,10 @@ function grow_tree!(
             ti, costi = optimize_bifurcation_point(
                 tree.segments.proximal_x[ci], tree.segments.proximal_y[ci], tree.segments.proximal_z[ci],
                 tree.segments.distal_x[ci], tree.segments.distal_y[ci], tree.segments.distal_z[ci],
-                tree.segments.radius[ci], tx, ty, tz, gamma)
+                tree.segments.radius[ci], tx, ty, tz, gamma;
+                t_min=_MIN_BIFURCATION_T, t_max=_MAX_BIFURCATION_T)
 
+            _bifurcation_geometry_valid(tree.segments, ci, ti, tx, ty, tz) || continue
             costi >= best_cost && continue
 
             # Compute bifurcation point

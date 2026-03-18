@@ -102,6 +102,9 @@ function _nrb_build_tree(
     centerline_map::Dict{String, XCATCenterline},
     tree_spec::NRBTreeSpec;
     reference_line::Union{Nothing, XCATCenterline}=nothing,
+    trim_root_cap::Bool=true,
+    root_cap_radius_fraction::Float64=0.75,
+    root_cap_max_trim_fraction::Float64=0.25,
 )
     isempty(tree_spec.surface_names) && error("Tree spec `$(tree_spec.name)` has no surface names.")
     root_name = first(tree_spec.surface_names)
@@ -110,6 +113,13 @@ function _nrb_build_tree(
     root = centerline_map[root_name]
     if reference_line !== nothing
         root = _orient_root_to_aorta(root, reference_line)
+    end
+    if trim_root_cap
+        root = _trim_root_cap_by_radius(
+            root;
+            min_radius_fraction=root_cap_radius_fraction,
+            max_trim_fraction=root_cap_max_trim_fraction,
+        )
     end
 
     segments = Dict(root.name => root)
@@ -200,13 +210,32 @@ function nrb_import_fixed_trees(
     surfaces::Union{Nothing, Vector{XCATNurbsSurface}}=nothing,
     capacity::Union{Nothing, Int}=nothing,
     capacity_map::Dict{String, Int}=Dict{String, Int}(),
+    centerline_resample::Bool=true,
+    centerline_min_spacing_mm::Float64=0.75,
+    centerline_max_spacing_mm::Float64=1.5,
+    centerline_radius_spacing_factor::Float64=0.75,
+    trim_root_cap::Bool=true,
+    root_cap_radius_fraction::Float64=0.75,
+    root_cap_max_trim_fraction::Float64=0.25,
 )
     surface_set = isnothing(surfaces) ? parse_xcat_nrb(nrb_path) : surfaces
     vessel_surfaces = xcat_select_objects(
         surface_set;
         names=nrb_vessel_surface_names(spec; include_reference=true),
     )
-    centerlines = [xcat_centerline_from_surface(surface) for surface in vessel_surfaces]
+    centerlines = XCATCenterline[]
+    for surface in vessel_surfaces
+        line = xcat_centerline_from_surface(surface)
+        if centerline_resample
+            line = xcat_resample_centerline(
+                line;
+                min_spacing_mm=centerline_min_spacing_mm,
+                max_spacing_mm=centerline_max_spacing_mm,
+                radius_spacing_factor=centerline_radius_spacing_factor,
+            )
+        end
+        push!(centerlines, line)
+    end
     centerline_map = _nrb_surface_dict(centerlines)
     reference_line =
         isnothing(spec.root_reference_surface_name) ? nothing :
@@ -214,7 +243,14 @@ function nrb_import_fixed_trees(
 
     xcat_trees = Dict{String, XCATCenterlineTree}()
     for tree_spec in spec.tree_specs
-        xcat_trees[tree_spec.name] = _nrb_build_tree(centerline_map, tree_spec; reference_line=reference_line)
+        xcat_trees[tree_spec.name] = _nrb_build_tree(
+            centerline_map,
+            tree_spec;
+            reference_line=reference_line,
+            trim_root_cap=trim_root_cap,
+            root_cap_radius_fraction=root_cap_radius_fraction,
+            root_cap_max_trim_fraction=root_cap_max_trim_fraction,
+        )
     end
 
     fixed_trees = xcat_trees_to_vascular_trees(
@@ -246,6 +282,26 @@ function _resolve_tree_params(
     return resolved
 end
 
+function _scaled_fixed_prefix_radii(
+    fixed_trees::Dict{String, VascularTree},
+    root_target_diameter_um_by_tree::Dict{String, Float64},
+)
+    scaled = Dict{String, Vector{Float64}}()
+    for (name, tree) in fixed_trees
+        radii = copy(tree.segments.radius[1:tree.segments.n])
+        if haskey(root_target_diameter_um_by_tree, name)
+            root_id = Int(tree.root_segment_id)
+            root_diameter_um = tree.segments.radius[root_id] * 2000.0
+            target_diameter_um = root_target_diameter_um_by_tree[name]
+            if root_diameter_um > 0.0 && target_diameter_um > 0.0
+                radii .*= target_diameter_um / root_diameter_um
+            end
+        end
+        scaled[name] = radii
+    end
+    return scaled
+end
+
 function generate_nrb_continuation_forest(
     nrb_path::AbstractString,
     spec::NRBOrganSpec,
@@ -253,10 +309,27 @@ function generate_nrb_continuation_forest(
     rng::AbstractRNG=Random.default_rng(),
     verbose::Bool=false,
     kassab::Bool=true,
+    handoff_order::Union{Nothing, Int}=nothing,
     target_interior::Int=80_000,
     max_candidates::Int=500_000,
     batch_size::Int=8192,
     tree_capacity::Int=5000,
+    tree_params::Dict{String, MorphometricParams}=Dict{String, MorphometricParams}(),
+    enforce_phase1_morphometry::Bool=false,
+    phase1_length_sigma::Float64=5.0,
+    phase1_morphometry_by_tree::Dict{String, Bool}=Dict{String, Bool}(),
+    phase1_length_sigma_by_tree::Dict{String, Float64}=Dict{String, Float64}(),
+    phase1_use_fixed_handoff_terminal_radius::Bool=true,
+    fixed_prefix_radius_blend_by_tree::Dict{String, Float64}=Dict{String, Float64}(),
+    fixed_prefix_root_target_diameter_um_by_tree::Dict{String, Float64}=Dict{String, Float64}(),
+    territory_tree_distance_weight::Float64=0.0,
+    centerline_resample::Bool=true,
+    centerline_min_spacing_mm::Float64=0.75,
+    centerline_max_spacing_mm::Float64=1.5,
+    centerline_radius_spacing_factor::Float64=0.75,
+    trim_root_cap::Bool=true,
+    root_cap_radius_fraction::Float64=0.75,
+    root_cap_max_trim_fraction::Float64=0.25,
 )
     domain, surfaces = nrb_shell_domain(
         nrb_path,
@@ -272,9 +345,18 @@ function generate_nrb_continuation_forest(
         spec;
         surfaces=surfaces,
         capacity=tree_capacity,
+        centerline_resample=centerline_resample,
+        centerline_min_spacing_mm=centerline_min_spacing_mm,
+        centerline_max_spacing_mm=centerline_max_spacing_mm,
+        centerline_radius_spacing_factor=centerline_radius_spacing_factor,
+        trim_root_cap=trim_root_cap,
+        root_cap_radius_fraction=root_cap_radius_fraction,
+        root_cap_max_trim_fraction=root_cap_max_trim_fraction,
     )
     fixed_trees = imported.trees
+    fixed_prefix_radii = _scaled_fixed_prefix_radii(fixed_trees, fixed_prefix_root_target_diameter_um_by_tree)
     working_trees = deepcopy(fixed_trees)
+    per_tree_params = _resolve_tree_params(spec, params, tree_params)
     tree_configs = fixed_tree_configs(
         fixed_trees;
         target_terminals=nrb_tree_target_terminals(spec),
@@ -288,6 +370,16 @@ function generate_nrb_continuation_forest(
         rng=rng,
         verbose=verbose,
         kassab=kassab,
+        tree_params=per_tree_params,
+        handoff_order=handoff_order,
+        enforce_phase1_morphometry=enforce_phase1_morphometry,
+        phase1_length_sigma=phase1_length_sigma,
+        phase1_morphometry_by_tree=phase1_morphometry_by_tree,
+        phase1_length_sigma_by_tree=phase1_length_sigma_by_tree,
+        phase1_use_fixed_handoff_terminal_radius=phase1_use_fixed_handoff_terminal_radius,
+        fixed_prefix_radii=fixed_prefix_radii,
+        fixed_prefix_radius_blend_by_tree=fixed_prefix_radius_blend_by_tree,
+        territory_tree_distance_weight=territory_tree_distance_weight,
     )
 
     return (
@@ -312,6 +404,7 @@ function generate_nrb_kassab_forest(
     handoff_order::Int=6,
     subdivision_max_order::Union{Nothing, Int}=nothing,
     apply_geometry::Bool=true,
+    apply_kassab_radius_refinement::Bool=false,
     enforce_full_cutoff::Bool=false,
     max_tree_capacity::Int=2_000_000,
     target_interior::Int=80_000,
@@ -319,6 +412,21 @@ function generate_nrb_kassab_forest(
     batch_size::Int=8192,
     tree_capacity::Int=10_000,
     tree_params::Dict{String, MorphometricParams}=Dict{String, MorphometricParams}(),
+    enforce_phase1_morphometry::Bool=false,
+    phase1_length_sigma::Float64=5.0,
+    phase1_morphometry_by_tree::Dict{String, Bool}=Dict{String, Bool}(),
+    phase1_length_sigma_by_tree::Dict{String, Float64}=Dict{String, Float64}(),
+    phase1_use_fixed_handoff_terminal_radius::Bool=true,
+    fixed_prefix_radius_blend_by_tree::Dict{String, Float64}=Dict{String, Float64}(),
+    fixed_prefix_root_target_diameter_um_by_tree::Dict{String, Float64}=Dict{String, Float64}(),
+    territory_tree_distance_weight::Float64=0.0,
+    centerline_resample::Bool=true,
+    centerline_min_spacing_mm::Float64=0.75,
+    centerline_max_spacing_mm::Float64=1.5,
+    centerline_radius_spacing_factor::Float64=0.75,
+    trim_root_cap::Bool=true,
+    root_cap_radius_fraction::Float64=0.75,
+    root_cap_max_trim_fraction::Float64=0.25,
 )
     t_start = time()
 
@@ -336,6 +444,13 @@ function generate_nrb_kassab_forest(
         spec;
         surfaces=surfaces,
         capacity=tree_capacity,
+        centerline_resample=centerline_resample,
+        centerline_min_spacing_mm=centerline_min_spacing_mm,
+        centerline_max_spacing_mm=centerline_max_spacing_mm,
+        centerline_radius_spacing_factor=centerline_radius_spacing_factor,
+        trim_root_cap=trim_root_cap,
+        root_cap_radius_fraction=root_cap_radius_fraction,
+        root_cap_max_trim_fraction=root_cap_max_trim_fraction,
     )
     per_tree_params = _resolve_tree_params(spec, params, tree_params)
 
@@ -361,8 +476,16 @@ function generate_nrb_kassab_forest(
         spec;
         surfaces=surfaces,
         capacity_map=capacity_map,
+        centerline_resample=centerline_resample,
+        centerline_min_spacing_mm=centerline_min_spacing_mm,
+        centerline_max_spacing_mm=centerline_max_spacing_mm,
+        centerline_radius_spacing_factor=centerline_radius_spacing_factor,
+        trim_root_cap=trim_root_cap,
+        root_cap_radius_fraction=root_cap_radius_fraction,
+        root_cap_max_trim_fraction=root_cap_max_trim_fraction,
     )
     fixed_trees = imported.trees
+    fixed_prefix_radii = _scaled_fixed_prefix_radii(fixed_trees, fixed_prefix_root_target_diameter_um_by_tree)
     working_trees = deepcopy(fixed_trees)
     tree_configs = fixed_tree_configs(
         fixed_trees;
@@ -382,6 +505,16 @@ function generate_nrb_kassab_forest(
         rng=rng,
         verbose=verbose,
         kassab=true,
+        tree_params=per_tree_params,
+        handoff_order=handoff_order,
+        enforce_phase1_morphometry=enforce_phase1_morphometry,
+        phase1_length_sigma=phase1_length_sigma,
+        phase1_morphometry_by_tree=phase1_morphometry_by_tree,
+        phase1_length_sigma_by_tree=phase1_length_sigma_by_tree,
+        phase1_use_fixed_handoff_terminal_radius=phase1_use_fixed_handoff_terminal_radius,
+        fixed_prefix_radii=fixed_prefix_radii,
+        fixed_prefix_radius_blend_by_tree=fixed_prefix_radius_blend_by_tree,
+        territory_tree_distance_weight=territory_tree_distance_weight,
     )
     t_phase1_end = time()
     if verbose
@@ -416,6 +549,13 @@ function generate_nrb_kassab_forest(
             end
         end
         update_radii!(tree, tp.gamma)
+        if apply_kassab_radius_refinement
+            apply_full_kassab_radii!(tree, tp; rng=rng)
+        end
+        if haskey(fixed_prefix_radii, name)
+            alpha = get(fixed_prefix_radius_blend_by_tree, name, 0.0)
+            alpha > 0.0 && _apply_fixed_prefix_radii_blend!(tree, fixed_prefix_radii[name], alpha)
+        end
     end
     t_phase2_end = time()
 

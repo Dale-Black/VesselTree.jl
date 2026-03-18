@@ -36,8 +36,11 @@ include("barabasi.jl")
 include("validation.jl")
 include("subdivision.jl")
 include("forest.jl")
+include("contrast_transport.jl")
+include("contrast_viewer.jl")
 include("export.jl")
 include("xcat_nrb.jl")
+include("unified_viewer.jl")
 include("xcat_integration.jl")
 include("nrb_growth.jl")
 
@@ -57,6 +60,12 @@ export update_radii!, grow_tree!, add_bifurcation!
 export SpatialGrid, build_grid, query_nearby
 export compute_resistances!, compute_flows!, compute_pressures!, validate_hemodynamics
 export assign_terminal_flows!, recompute_radii_from_flow!
+export ContrastTransportResult, gamma_variate_input, root_pulse_input
+export simulate_contrast_transport, simulate_forest_contrast, segment_mass_mg
+export ContrastViewerTreeData, ContrastViewerData
+export prepare_contrast_viewer_data, export_contrast_viewer_html, serve_static_directory
+export UnifiedViewerPointLayerData, UnifiedViewerLineLayerData, UnifiedViewerData
+export prepare_unified_viewer_data, export_unified_viewer_html
 export assign_strahler_orders!, assign_strahler_orders_simple!, assign_diameter_defined_strahler!
 export sample_asymmetry, compute_daughter_radii, apply_kassab_radii!, apply_full_kassab_radii!
 export ElementData, group_into_elements, build_element_connectivity
@@ -80,7 +89,7 @@ export export_wenbo_txt, export_forest_wenbo_txt
 export XCATNurbsSurface, parse_xcat_nrb, xcat_bounds, xcat_center, xcat_object_dict, xcat_select_objects, xcat_summary_rows
 export xcat_uv_counts, xcat_degrees, xcat_surface_point, xcat_surface_normal, xcat_sample_surface, xcat_export_sampled_surface_csv
 export xcat_sampled_surface_rows, xcat_default_cavity_names, xcat_myocardial_shell_domain
-export XCATCenterline, xcat_surface_axis, xcat_centerline_from_surface, xcat_centerline_summary_rows, xcat_export_centerline_csv
+export XCATCenterline, xcat_surface_axis, xcat_centerline_from_surface, xcat_resample_centerline, xcat_centerline_length_mm, xcat_centerline_summary_rows, xcat_export_centerline_csv
 export xcat_reverse_centerline, xcat_merge_centerline_chain, xcat_build_coronary_trunks
 export XCATTreeConnection, XCATCenterlineTree, xcat_build_coronary_trees, xcat_tree_summary_rows
 export xcat_tree_to_vascular_tree, xcat_trees_to_vascular_trees

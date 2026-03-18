@@ -214,11 +214,14 @@ function _sample_segment_length(order::Int, params::MorphometricParams, rng::Abs
     σ_ln = sqrt(log1p(cv2))
     μ_ln = log(mean_um) - 0.5 * σ_ln^2
     min_um = max(params.vessel_cutoff_um, mean_um * 0.1)
-    for _ in 1:10
+    max_um = max(mean_um + 3.0 * sd_um, mean_um * 1.5)
+    for _ in 1:20
         l = exp(μ_ln + σ_ln * randn(rng))
-        l >= min_um && return l / 1000.0  # um → mm
+        if min_um <= l <= max_um
+            return l / 1000.0  # um → mm
+        end
     end
-    return mean_um / 1000.0  # fallback to mean
+    return clamp(mean_um, min_um, max_um) / 1000.0  # fallback to truncated mean
 end
 
 """
@@ -240,6 +243,93 @@ function _sample_element_diameter(order::Int, params::MorphometricParams, rng::A
         d >= min_um && return d
     end
     return mean_um
+end
+
+@inline function _clip_segment_endpoint_to_domain(
+    domain::AbstractDomain,
+    start::NTuple{3, Float64},
+    target::NTuple{3, Float64};
+    max_iter::Int=40,
+    shrink::Float64=1e-3,
+)
+    in_domain(domain, target) && return target
+    in_domain(domain, start) || return project_to_domain(domain, target)
+
+    sx, sy, sz = start
+    dx = target[1] - sx
+    dy = target[2] - sy
+    dz = target[3] - sz
+
+    lo = 0.0
+    hi = 1.0
+    for _ in 1:max_iter
+        mid = 0.5 * (lo + hi)
+        probe = (sx + mid * dx, sy + mid * dy, sz + mid * dz)
+        if in_domain(domain, probe)
+            lo = mid
+        else
+            hi = mid
+        end
+    end
+
+    t = clamp(lo * (1.0 - shrink), 0.0, 1.0)
+    return (sx + t * dx, sy + t * dy, sz + t * dz)
+end
+
+@inline function _subdivision_min_length_mm(
+    order::Int,
+    params::MorphometricParams,
+    radius_mm::Float64;
+    mean_fraction::Float64=0.25,
+)
+    idx = clamp(order + 1, 1, length(params.length_mean))
+    mean_mm = params.length_mean[idx] / 1000.0
+    return max(mean_mm * mean_fraction, 2.0 * radius_mm, params.vessel_cutoff_um / 1000.0)
+end
+
+function _sample_subdivision_segment(
+    bp::NTuple{3, Float64},
+    current_dir::NTuple{3, Float64},
+    is_continuation::Bool,
+    segment_order::Int,
+    parent_order::Int,
+    radius_mm::Float64,
+    params::MorphometricParams,
+    rng::AbstractRNG,
+    domain::Union{AbstractDomain, Nothing};
+    n_attempts::Int=12,
+)
+    min_length_mm = _subdivision_min_length_mm(segment_order, params, radius_mm)
+    bp_x, bp_y, bp_z = bp
+
+    for _ in 1:n_attempts
+        seg_length = _sample_segment_length(segment_order, params, rng)
+        seg_dir = _random_daughter_direction(current_dir, is_continuation, segment_order, parent_order, rng)
+
+        if domain isa EllipsoidShellDomain
+            seg_dir = _shell_tangent_project(domain, bp, seg_dir)
+        end
+
+        seg_distal = (
+            bp_x + seg_dir[1] * seg_length,
+            bp_y + seg_dir[2] * seg_length,
+            bp_z + seg_dir[3] * seg_length,
+        )
+
+        if domain !== nothing && !in_domain(domain, seg_distal)
+            seg_distal = _clip_segment_endpoint_to_domain(domain, bp, seg_distal)
+        end
+
+        ax = seg_distal[1] - bp_x
+        ay = seg_distal[2] - bp_y
+        az = seg_distal[3] - bp_z
+        actual_length = sqrt(ax^2 + ay^2 + az^2)
+        actual_length >= min_length_mm || continue
+        actual_length > 1e-9 || continue
+        return seg_distal, (ax / actual_length, ay / actual_length, az / actual_length)
+    end
+
+    return nothing
 end
 
 function _sample_cm_daughter_order(parent_order::Int, params::MorphometricParams, rng::AbstractRNG)
@@ -418,55 +508,25 @@ function _subdivide_recursive!(
         bp_z = seg.distal_z[current_parent]
         bp = (bp_x, bp_y, bp_z)
 
-        # Create daughter segment (branch)
-        d_length = _sample_segment_length(d_order, params, rng)
-        d_dir = _random_daughter_direction(current_dir, false, d_order, parent_order, rng)
+        d_segment = _sample_subdivision_segment(bp, current_dir, false, d_order, parent_order, d_radius, params, rng, domain)
+        c_segment = _sample_subdivision_segment(bp, current_dir, true, parent_order, parent_order, c_radius, params, rng, domain)
+        isnothing(c_segment) && return
 
-        if domain isa EllipsoidShellDomain
-            d_dir = _shell_tangent_project(domain, bp, d_dir)
+        d_id = Int32(-1)
+        if !isnothing(d_segment)
+            d_distal, _ = d_segment
+            d_id = add_segment!(tree, bp, d_distal, d_radius, Int32(current_parent))
+            tree.topology.strahler_order[d_id] = Int32(d_order)
         end
 
-        d_distal = (bp_x + d_dir[1] * d_length, bp_y + d_dir[2] * d_length, bp_z + d_dir[3] * d_length)
-
-        if domain !== nothing && !in_domain(domain, d_distal)
-            d_distal = project_to_domain(domain, d_distal)
-        end
-
-        d_id = add_segment!(tree, bp, d_distal, d_radius, Int32(current_parent))
-        tree.topology.strahler_order[d_id] = Int32(d_order)
-
-        # Create continuation segment (same order as parent element)
-        c_length = _sample_segment_length(parent_order, params, rng)
-        c_dir = _random_daughter_direction(current_dir, true, parent_order, parent_order, rng)
-
-        if domain isa EllipsoidShellDomain
-            c_dir = _shell_tangent_project(domain, bp, c_dir)
-        end
-
-        c_distal = (bp_x + c_dir[1] * c_length, bp_y + c_dir[2] * c_length, bp_z + c_dir[3] * c_length)
-
-        if domain !== nothing && !in_domain(domain, c_distal)
-            c_distal = project_to_domain(domain, c_distal)
-        end
-
+        c_distal, c_dir = c_segment
         c_id = add_segment!(tree, bp, c_distal, c_radius, Int32(current_parent))
         tree.topology.strahler_order[c_id] = Int32(parent_order)
 
-        # Update direction from actual (possibly projected) continuation segment
-        actual_cx = c_distal[1] - bp_x
-        actual_cy = c_distal[2] - bp_y
-        actual_cz = c_distal[3] - bp_z
-        actual_len = sqrt(actual_cx^2 + actual_cy^2 + actual_cz^2)
-        if actual_len > 1e-15
-            c_dir = (actual_cx / actual_len, actual_cy / actual_len, actual_cz / actual_len)
-        end
-
-        # Recursively subdivide the daughter
-        if d_order > 0
+        if d_id > 0 && d_order > 0
             _subdivide_recursive!(tree, Int(d_id), d_order, params, rng, domain; enforce_full_cutoff=enforce_full_cutoff)
         end
 
-        # Move to continuation for next bifurcation in the chain
         current_parent = Int(c_id)
         current_dir = c_dir
     end
@@ -494,35 +554,25 @@ function _subdivide_recursive!(
             d1_radius, d2_radius = r_small, r_large
         end
 
-        # Daughter 1
-        d1_length = _sample_segment_length(d1_order, params, rng)
-        d1_dir = _random_daughter_direction(current_dir, false, d1_order, parent_order, rng)
-        if domain isa EllipsoidShellDomain
-            d1_dir = _shell_tangent_project(domain, bp, d1_dir)
-        end
-        d1_distal = (bp_x + d1_dir[1] * d1_length, bp_y + d1_dir[2] * d1_length, bp_z + d1_dir[3] * d1_length)
-        if domain !== nothing && !in_domain(domain, d1_distal)
-            d1_distal = project_to_domain(domain, d1_distal)
-        end
-        d1_id = add_segment!(tree, bp, d1_distal, d1_radius, Int32(current_parent))
-        tree.topology.strahler_order[d1_id] = Int32(d1_order)
+        d1_segment = _sample_subdivision_segment(bp, current_dir, false, d1_order, parent_order, d1_radius, params, rng, domain)
+        d2_segment = _sample_subdivision_segment(bp, current_dir, false, d2_order, parent_order, d2_radius, params, rng, domain)
 
-        # Daughter 2
-        d2_length = _sample_segment_length(d2_order, params, rng)
-        d2_dir = _random_daughter_direction(current_dir, false, d2_order, parent_order, rng)
-        if domain isa EllipsoidShellDomain
-            d2_dir = _shell_tangent_project(domain, bp, d2_dir)
+        d1_id = Int32(-1)
+        if !isnothing(d1_segment)
+            d1_distal, _ = d1_segment
+            d1_id = add_segment!(tree, bp, d1_distal, d1_radius, Int32(current_parent))
+            tree.topology.strahler_order[d1_id] = Int32(d1_order)
         end
-        d2_distal = (bp_x + d2_dir[1] * d2_length, bp_y + d2_dir[2] * d2_length, bp_z + d2_dir[3] * d2_length)
-        if domain !== nothing && !in_domain(domain, d2_distal)
-            d2_distal = project_to_domain(domain, d2_distal)
-        end
-        d2_id = add_segment!(tree, bp, d2_distal, d2_radius, Int32(current_parent))
-        tree.topology.strahler_order[d2_id] = Int32(d2_order)
 
-        # Recursively subdivide both daughters
-        d1_order > 0 && _subdivide_recursive!(tree, Int(d1_id), d1_order, params, rng, domain; enforce_full_cutoff=enforce_full_cutoff)
-        d2_order > 0 && _subdivide_recursive!(tree, Int(d2_id), d2_order, params, rng, domain; enforce_full_cutoff=enforce_full_cutoff)
+        d2_id = Int32(-1)
+        if !isnothing(d2_segment)
+            d2_distal, _ = d2_segment
+            d2_id = add_segment!(tree, bp, d2_distal, d2_radius, Int32(current_parent))
+            tree.topology.strahler_order[d2_id] = Int32(d2_order)
+        end
+
+        d1_id > 0 && d1_order > 0 && _subdivide_recursive!(tree, Int(d1_id), d1_order, params, rng, domain; enforce_full_cutoff=enforce_full_cutoff)
+        d2_id > 0 && d2_order > 0 && _subdivide_recursive!(tree, Int(d2_id), d2_order, params, rng, domain; enforce_full_cutoff=enforce_full_cutoff)
     end
     # For N=1: the internal loop above creates one daughter plus a continuation
     # segment that is still part of the same parent-order element. Continue
