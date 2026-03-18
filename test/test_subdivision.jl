@@ -7,6 +7,26 @@ using Random
     params = kassab_coronary_params()
     gamma = params.gamma
 
+    @testset "phase1 fixed handoff radius preserves Murray feasibility" begin
+        cont = VesselTree._phase1_continuation_radius_from_fixed_terminal(0.20, 0.075, gamma)
+        @test !isnothing(cont)
+        @test cont > 0.075
+        @test cont^gamma + 0.075^gamma ≈ 0.20^gamma atol = 1e-12
+        @test isnothing(VesselTree._phase1_continuation_radius_from_fixed_terminal(0.075, 0.075, gamma))
+    end
+
+    @testset "domain clipping stays local" begin
+        domain = BoxDomain((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+        start = (0.5, 0.5, 0.5)
+        target = (2.0, 0.5, 0.5)
+        clipped = VesselTree._clip_segment_endpoint_to_domain(domain, start, target)
+        @test in_domain(domain, clipped)
+        @test clipped[1] <= 1.0
+        @test clipped[1] >= 0.99
+        @test clipped[2] ≈ 0.5 atol = 1e-9
+        @test clipped[3] ≈ 0.5 atol = 1e-9
+    end
+
     @testset "estimate_total_segments — order 0 returns 1" begin
         @test estimate_total_segments(0, params) == 1
     end
@@ -121,7 +141,7 @@ using Random
         grow_tree!(est_tree, domain, 50, params; rng=MersenneTwister(42))
         cap = estimate_subdivision_capacity(est_tree, params)
 
-        tree = VascularTree("test", max(cap, 1000))
+        tree = VascularTree("test", max(cap * 4, 10_000))
         add_segment!(tree, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), 1.0, Int32(-1))
         rng = MersenneTwister(42)
         grow_tree!(tree, domain, 50, params; rng=rng)
