@@ -43,6 +43,9 @@ include("xcat_nrb.jl")
 include("unified_viewer.jl")
 include("xcat_integration.jl")
 include("nrb_growth.jl")
+include("persistence.jl")
+include("basis_bridge.jl")
+include("ct_viewer.jl")
 
 export VascularTree, SegmentData, TreeTopology
 export add_segment!, get_children, n_segments
@@ -98,6 +101,14 @@ export NRBTreeSpec, NRBOrganSpec, xcat_heart_organ_spec
 export nrb_vessel_surface_names, nrb_tree_target_terminals, nrb_tree_territory_fractions
 export nrb_shell_domain, nrb_import_fixed_trees, generate_nrb_continuation_forest, generate_nrb_kassab_forest
 export apply_vasodilation!, compute_root_flow_mLmin
+export SparseContrastVolume, format_run_timestamp, sparse_contrast_to_dense
+export rasterize_forest_contrast_sparse, save_tree_snapshot, save_forest_snapshot
+export save_contrast_snapshot, write_xcat_surface, write_xcat_nrb
+export export_fused_nrb_model, save_xcat_run_artifacts
+export XCATRawLabels, XCATRawAlignment
+export load_xcat_raw_labels, load_xcat_materials_from_xlsx, xcat_label_bbox, estimate_xcat_raw_alignment
+export compile_basis_material_frame, save_basis_frame, generate_basis_frames
+export CTViewerData, load_ct_viewer_data, export_ct_viewer_html
 
 # Visualization stubs (implemented by VesselTreeMakieExt when CairoMakie is loaded)
 function plot_tree end

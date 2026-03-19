@@ -265,6 +265,149 @@ The current XCAT example is wired to the latest visually validated coronary setu
 - per-tree proximal fixed-prefix blending,
 - a single browser scene for geometry plus iodine flow inspection.
 
+### 11. Save the current run to disk
+
+Use:
+
+- [xcat_save_artifacts.jl](/media/molloi-lab/2TB3/wenbo%20playground/flow%20simulation%20tree%20generation/v4/examples/xcat_save_artifacts.jl)
+
+This script saves three groups of artifacts for the current XCAT coronary run:
+
+- timestamped tree snapshots for each branch, using `BRANCH-TIMESTAMP` filenames,
+- dynamic contrast data, including per-segment time courses plus a voxelized iodine concentration volume,
+- a fused `.nrb` model that appends the grown vascular tree back into the original XCAT file.
+
+Default output location:
+
+- `v4/output/saved_runs/<TIMESTAMP>/`
+
+Directory layout:
+
+- `trees/`
+  Contains branch-specific snapshots such as `LAD-<TIMESTAMP>.jld2`, `LCX-<TIMESTAMP>.csv`, and Wenbo-format `.txt` exports.
+- `contrast/`
+  Contains `contrast-segments-<TIMESTAMP>.jld2` and `contrast-volume-<TIMESTAMP>.jld2`.
+  The volume export always stores a sparse voxel representation and will also save a dense `4D` array automatically when the estimated array size is reasonable.
+- `model/`
+  Contains `xcat-grown-<TIMESTAMP>.nrb`, which preserves the original XCAT surfaces and appends the grown tree as additional vessel surfaces.
+
+Useful environment variables:
+
+- `XCAT_ARTIFACT_OUTPUT_DIR`
+- `XCAT_CONTRAST_DENSE_MODE=auto|always|never`
+- `XCAT_CONTRAST_VOXEL_SPACING_MM`
+- `XCAT_CONTRAST_VOXEL_SUPERSAMPLE`
+
+Launch command:
+
+```bash
+JULIA_DEPOT_PATH=/tmp/julia_depot:/home/molloi-lab/.julia \
+/home/molloi-lab/.julia/juliaup/julia-1.10.10+0.x64.linux.gnu/bin/julia \
+  --project="v4" v4/examples/xcat_save_artifacts.jl
+```
+
+### 12. Compile `basis_simulator` phantom frames
+
+Use the new notebook:
+
+- [xcat_basis_frames.jl](/media/molloi-lab/2TB3/wenbo%20playground/flow%20simulation%20tree%20generation/v4/notebooks/xcat_basis_frames.jl)
+
+This notebook does **not** modify `basis_simulator`. Instead, it compiles one full phantom frame per requested time point by combining:
+
+- the baseline XCAT raw label volume,
+- the non-contrast XCAT material spreadsheet,
+- the newly grown distal coronary tree,
+- the time-varying segment iodine concentrations.
+
+Current behavior:
+
+- writes one frame per requested time point (for example `t = 0:9 s`),
+- keeps the original XCAT raw grid as the simulator grid,
+- overlays only the newly grown distal tree rather than rewriting the original proximal XCAT vessels,
+- emits a full label mask plus a `label => XA.Material` dictionary for each frame, ready for downstream `basis_simulator` use.
+
+The notebook defaults to `run_pipeline = false` so it is safe to open without immediately launching a heavy XCAT regeneration run.
+
+Core bridge functions now live in `VesselTree`:
+
+- `load_xcat_raw_labels(...)`
+- `load_xcat_materials_from_xlsx(...)`
+- `estimate_xcat_raw_alignment(...)`
+- `compile_basis_material_frame(...)`
+- `save_basis_frame(...)`
+- `generate_basis_frames(...)`
+
+### 13. Run GE scanner smoke scans on compiled frames
+
+Use the new notebook:
+
+- [xcat_basis_ge_scan.jl](/media/molloi-lab/2TB3/wenbo%20playground/flow%20simulation%20tree%20generation/v4/notebooks/xcat_basis_ge_scan.jl)
+
+This notebook stays outside the simulator core and simply **applies** the existing `BasisSimulator` GE workflow to one or more precompiled basis frames. It is intended as the bridge from:
+
+- `xcat_basis_frames.jl` output
+- to GE-style forward projection + FDK reconstruction
+
+Current behavior:
+
+- loads one or more frame manifests from `xcat_basis_frames.json`,
+- crops around the dynamic coronary overlay,
+- optionally downsamples the cropped mask for faster smoke testing,
+- builds a `BS.Phantom(mask, materials_dict, voxel_size_cm)`,
+- runs the existing GE scanner simulation and FDK reconstruction,
+- saves one scan artifact set per frame.
+
+Recommended smoke-scan controls are exposed through environment variables:
+
+- `XCAT_RUN_GE_SCAN=true`
+- `XCAT_SCAN_ALL_FRAMES=true|false`
+- `XCAT_FRAME_INDEX`
+- `XCAT_GE_DOWNSAMPLE_FACTOR`
+- `XCAT_GE_RECON_XY_CAP`
+- `XCAT_GE_RECON_SLICES_CAP`
+- `XCAT_GE_CALIBRATE_WATER=true|false`
+- `XCAT_GE_PROTOCOL_VIEWS`
+- `XCAT_GE_PROTOCOL_MA`
+- `XCAT_GE_SIM_FIDELITY=high|medium|low`
+- `XCAT_GE_SCAN_OUTPUT_DIR`
+
+This notebook requires **Julia 1.11+** because `basis_simulator` is pinned to that range. The default `VesselTree` development workflow can stay on Julia 1.10; only the GE scan notebook needs the newer runtime.
+
+### 14. View reconstructed CT time series in the browser
+
+Use the new notebook:
+
+- [xcat_ct_viewer.jl](/media/molloi-lab/2TB3/wenbo%20playground/flow%20simulation%20tree%20generation/v4/notebooks/xcat_ct_viewer.jl)
+
+This notebook loads one `ge_scan_run.json` manifest and exports a lightweight browser viewer for the reconstructed CT volumes.
+
+Current viewer features:
+
+- a **time slider** across the reconstructed frames (for example `t = 0..9 s`),
+- a **slice slider**,
+- axial / coronal / sagittal plane switching,
+- Play / Pause controls for time playback,
+- simple display-window presets based on the reconstructed intensity range.
+
+By default it points at the latest smoke-scan run:
+
+- `v4/output/ge_scans_hu_all_full/20260318T160257/ge_scan_run.json`
+
+Useful environment variables:
+
+- `CT_VIEWER_RUN_MANIFEST`
+- `CT_VIEWER_OUTPUT_DIR`
+- `CT_VIEWER_HOST`
+- `CT_VIEWER_PORT`
+- `CT_VIEWER_PREFER_HU=true|false`
+- `CT_VIEWER_Q_LOW`
+- `CT_VIEWER_Q_HIGH`
+- `CT_VIEWER_SERVE=true|false`
+
+The notebook reuses the existing static HTTP helper and does not rerun any simulation; it only visualizes previously saved scan outputs.
+
+The current recommended default is the full HU-calibrated 10-frame run (`t = 0..9 s`) at `424 x 424 x 128`.
+
 ## Important Modeling Notes
 
 ### Pressure conditions
@@ -413,3 +556,33 @@ julia --project=. examples/xcat_kassab_full_cutoff.jl
 10. Only then move to the heaviest full-cutoff runs.
 
 This sequence is much faster for debugging than jumping directly to the heaviest workflow.
+
+
+### 15. Export reconstructed CT frames to DICOM
+
+You can convert any completed `ge_scan_run.json` plus its `*_scan.jld2` files into DICOM series **without rerunning the scanner**.
+
+Notebook entry point:
+
+- `v4/notebooks/xcat_export_dicom.jl`
+
+Python exporter used by the notebook:
+
+- `v4/scripts/export_ct_dicoms.py`
+
+Example:
+
+```bash
+XCAT_RUN_DICOM_EXPORT=true \
+XCAT_DICOM_RUN_MANIFEST="/path/to/ge_scan_run.json" \
+XCAT_DICOM_OUTPUT_DIR="/path/to/dicom_export" \
+julia --project="/path/to/v4" \
+  -e 'include("/path/to/v4/notebooks/xcat_export_dicom.jl")'
+```
+
+The exporter writes:
+
+- one DICOM series per time point (`t000`, `t001`, ...)
+- one axial slice per `.dcm` file
+- a `dicom_export_manifest.json` summary in the export directory
+
